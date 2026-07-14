@@ -30,6 +30,11 @@ proptest = [
   "transient-crypto/proptest",
   "serialize/proptest",
 ]
+gpu-blitzar = [
+  "transient-crypto/gpu-blitzar",
+  "midnight-proofs/gpu-blitzar",
+  "midnight-zk-stdlib/gpu-blitzar",
+]
 
 [dependencies]
 base-crypto = { version = "1.1.0", path = "../base-crypto", package = "midnight-base-crypto" }

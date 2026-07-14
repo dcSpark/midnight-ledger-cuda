@@ -129,7 +129,7 @@ impl Resolver for DustResolver {
         )?;
         Ok(Some(ProvingKeyMaterial {
             ir_source,
-            prover_key,
+            prover_key: prover_key.into(),
             verifier_key,
         }))
     }

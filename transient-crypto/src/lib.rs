@@ -32,6 +32,8 @@ mod macros;
 pub mod merkle_tree;
 #[cfg(feature = "mock-verify")]
 pub mod mock_verify;
+#[doc(hidden)]
+pub mod proof_timer;
 pub mod proofs;
 pub mod repr;
 pub mod schnorr;

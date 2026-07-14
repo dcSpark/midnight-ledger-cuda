@@ -216,7 +216,7 @@ pub fn create_proving_transaction_payload(
                 proof_data.insert(
                     k,
                     ProvingKeyMaterial {
-                        prover_key: pk.to_vec(),
+                        prover_key: pk.to_vec().into(),
                         verifier_key: vk.to_vec(),
                         ir_source: ir.to_vec(),
                     },
@@ -265,7 +265,7 @@ pub fn create_proving_payload(
             .map_err(|_| JsError::new("expected Uint8Array"))?
             .to_vec();
         Some(ProvingKeyMaterial {
-            prover_key: pk,
+            prover_key: pk.into(),
             verifier_key: vk,
             ir_source: ir,
         })

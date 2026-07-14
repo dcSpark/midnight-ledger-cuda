@@ -55,6 +55,16 @@ pub struct Preprocessed {
     pub pi_skips: Vec<Option<usize>>,
     pub binding_input: outer::Scalar,
     pub comm_comm: Option<(outer::Scalar, outer::Scalar)>,
+    poseidon_chain_witness: Option<PoseidonChainWitness>,
+}
+
+#[derive(Clone, Debug)]
+struct PoseidonChainWitness {
+    instruction_start: usize,
+    hash_count: usize,
+    values: Vec<outer::Scalar>,
+    #[cfg_attr(not(feature = "gpu-blitzar"), allow(dead_code))]
+    direct_cpu_advice: bool,
 }
 
 fn lnot(
@@ -211,6 +221,346 @@ fn ecc_from_parts(
     Ok(point_var)
 }
 
+#[cfg(feature = "gpu-blitzar")]
+fn poseidon_backend_mode() -> String {
+    std::env::var("MIDNIGHT_GPU_POSEIDON_BACKEND")
+        .unwrap_or_else(|_| "auto".to_string())
+        .to_ascii_lowercase()
+}
+
+#[cfg(feature = "gpu-blitzar")]
+fn gpu_poseidon_backend_enabled() -> bool {
+    midnight_curves::gpu_sppark::enabled()
+        && matches!(
+            poseidon_backend_mode().as_str(),
+            "1" | "true"
+                | "yes"
+                | "on"
+                | "gpu"
+                | "cuda"
+                | "sppark"
+                | "auto"
+                | "cpu"
+                | "cpu-witness"
+        )
+}
+
+#[cfg(feature = "gpu-blitzar")]
+fn gpu_poseidon_cuda_backend_enabled() -> bool {
+    gpu_poseidon_backend_enabled()
+        && matches!(
+            poseidon_backend_mode().as_str(),
+            "1" | "true" | "yes" | "on" | "gpu" | "cuda" | "sppark"
+        )
+}
+
+#[cfg(feature = "gpu-blitzar")]
+fn try_gpu_poseidon_chain_witness(
+    instructions: &[I],
+    start: usize,
+    memory: &[Fr],
+) -> Option<Result<PoseidonChainWitness, ProvingError>> {
+    if !gpu_poseidon_backend_enabled() {
+        return None;
+    }
+    let [initial, tail0, tail1, len] = poseidon_chain_span(instructions, start, memory.len())?;
+    let min_len = std::env::var("MIDNIGHT_GPU_POSEIDON_MIN_CHAIN")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(64);
+    if len < min_len {
+        return None;
+    }
+
+    if matches!(
+        poseidon_backend_mode().as_str(),
+        "auto" | "cpu" | "cpu-witness"
+    ) {
+        let values = transient_crypto::proof_timer::timed(
+            "proof_server.prover.zkir.preprocess.poseidon_chain_witness.cpu",
+            || {
+                midnight_circuits::hash::poseidon::hash_chain_circuit_witness(
+                    memory[initial].0,
+                    memory[tail0].0,
+                    memory[tail1].0,
+                    len,
+                )
+            },
+        );
+        return Some(Ok(PoseidonChainWitness {
+            instruction_start: start,
+            hash_count: len,
+            values,
+            direct_cpu_advice: false,
+        }));
+    }
+
+    use midnight_circuits::hash::poseidon::{POSEIDON_HASH_WITNESS_LEN, constants::PoseidonField};
+    let mds = <outer::Scalar as PoseidonField>::MDS
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let round_constants = <outer::Scalar as PoseidonField>::ROUND_CONSTANTS
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let result = transient_crypto::proof_timer::timed(
+        "proof_server.prover.zkir.preprocess.poseidon_chain_witness.gpu",
+        || {
+            midnight_curves::gpu_sppark::try_bls12_381_poseidon_hash_chain_witness(
+                memory[initial].0,
+                memory[tail0].0,
+                memory[tail1].0,
+                outer::Scalar::from(3),
+                &mds,
+                &round_constants,
+                len,
+            )
+            .expect("GPU enablement changed during Poseidon witness preprocessing")
+            .and_then(|values| {
+                if values.len() != len * POSEIDON_HASH_WITNESS_LEN {
+                    return Err(format!(
+                        "GPU Poseidon witness returned {} fields, expected {}",
+                        values.len(),
+                        len * POSEIDON_HASH_WITNESS_LEN
+                    ));
+                }
+                Ok(PoseidonChainWitness {
+                    instruction_start: start,
+                    hash_count: len,
+                    values,
+                    direct_cpu_advice: false,
+                })
+            })
+            .map_err(anyhow::Error::msg)
+        },
+    );
+    Some(result)
+}
+
+fn poseidon_chain_span(instructions: &[I], start: usize, memory_len: usize) -> Option<[usize; 4]> {
+    let I::TransientHash { inputs } = instructions.get(start)? else {
+        return None;
+    };
+    let [initial, tail0, tail1] = inputs.as_slice() else {
+        return None;
+    };
+    if (*initial as usize) >= memory_len
+        || (*tail0 as usize) >= memory_len
+        || (*tail1 as usize) >= memory_len
+    {
+        return None;
+    }
+
+    let mut len = 1usize;
+    while let Some(I::TransientHash { inputs }) = instructions.get(start + len) {
+        let [next, next_tail0, next_tail1] = inputs.as_slice() else {
+            break;
+        };
+        if *next as usize != memory_len + len - 1 || next_tail0 != tail0 || next_tail1 != tail1 {
+            break;
+        }
+        len += 1;
+    }
+
+    Some([*initial as usize, *tail0 as usize, *tail1 as usize, len])
+}
+
+#[cfg(feature = "gpu-blitzar")]
+fn cpu_poseidon_direct_advice_enabled(len: usize) -> bool {
+    let min_len = std::env::var("MIDNIGHT_GPU_POSEIDON_MIN_CHAIN")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(64);
+    gpu_poseidon_backend_enabled()
+        && matches!(
+            poseidon_backend_mode().as_str(),
+            "auto" | "cpu" | "cpu-witness"
+        )
+        && len >= min_len
+}
+
+#[cfg(feature = "gpu-blitzar")]
+fn resident_poseidon_advice_enabled(domain_len: usize) -> bool {
+    let min_len = std::env::var("MIDNIGHT_GPU_RESIDENT_FINALISE_MIN_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(1 << 15);
+    domain_len >= min_len
+}
+
+#[cfg(feature = "gpu-blitzar")]
+fn write_poseidon_permutation_advice(
+    columns: &mut [Vec<outer::Scalar>],
+    row_start: usize,
+    inputs: [outer::Scalar; 3],
+    witness: &[outer::Scalar],
+    layout: &[(usize, usize)],
+) -> Result<[outer::Scalar; 3], Error> {
+    use midnight_circuits::hash::poseidon::{
+        POSEIDON_PERMUTATION_WITNESS_LEN, constants::PoseidonField,
+    };
+
+    if witness.len() != POSEIDON_PERMUTATION_WITNESS_LEN || layout.len() != witness.len() {
+        return Err(Error::Synthesis(
+            "invalid precomputed Poseidon permutation witness".into(),
+        ));
+    }
+    for (column, value) in inputs.into_iter().enumerate() {
+        columns[column][row_start] = value;
+        columns[column][row_start + 1] =
+            value + <outer::Scalar as PoseidonField>::ROUND_CONSTANTS[0][column];
+    }
+    for (&value, &(column, row)) in witness.iter().zip(layout) {
+        columns[column][row_start + row] = value;
+    }
+
+    let output = &witness[witness.len() - 3..];
+    Ok([output[0], output[1], output[2]])
+}
+
+#[cfg(feature = "gpu-blitzar")]
+fn terminal_poseidon_direct_advice(
+    preprocessed: &Preprocessed,
+    chain: [usize; 4],
+    domain_len: usize,
+    num_advice_columns: usize,
+) -> Result<Vec<Vec<outer::Scalar>>, Error> {
+    use midnight_circuits::hash::poseidon::{
+        NB_POSEIDON_ADVICE_COLS, POSEIDON_HASH_WITNESS_LEN, POSEIDON_PERMUTATION_WITNESS_LEN,
+        poseidon_permutation_witness_layout,
+    };
+
+    let [initial, tail0, tail1, hash_count] = chain;
+    if num_advice_columns != NB_POSEIDON_ADVICE_COLS || preprocessed.memory.len() != 3 {
+        return Err(Error::Synthesis(
+            "terminal Poseidon direct-advice shape does not match the proving key".into(),
+        ));
+    }
+    let last_used_row = 1usize
+        .checked_add(41usize.saturating_mul(hash_count))
+        .ok_or_else(|| Error::Synthesis("terminal Poseidon row count overflow".into()))?;
+    if last_used_row >= domain_len {
+        return Err(Error::Synthesis(
+            "terminal Poseidon direct advice exceeds the proving domain".into(),
+        ));
+    }
+
+    let chain_witness = preprocessed
+        .poseidon_chain_witness
+        .as_ref()
+        .ok_or_else(|| Error::Synthesis("terminal Poseidon circuit witness is missing".into()))?;
+    if chain_witness.instruction_start != 0 || chain_witness.hash_count != hash_count {
+        return Err(Error::Synthesis(
+            "terminal Poseidon circuit witness does not match the relation".into(),
+        ));
+    }
+
+    let tail0_value = preprocessed.memory[tail0];
+    let tail1_value = preprocessed.memory[tail1];
+    let mut columns = if chain_witness.direct_cpu_advice {
+        midnight_circuits::hash::poseidon::hash_chain_circuit_advice_columns(
+            preprocessed.memory[initial],
+            tail0_value,
+            tail1_value,
+            hash_count,
+            domain_len,
+            2,
+        )
+    } else {
+        if chain_witness.values.len() != hash_count * POSEIDON_HASH_WITNESS_LEN {
+            return Err(Error::Synthesis(
+                "terminal Poseidon circuit witness has the wrong length".into(),
+            ));
+        }
+        let mut columns = (0..num_advice_columns)
+            .map(|_| vec![outer::Scalar::ZERO; domain_len])
+            .collect::<Vec<_>>();
+        let layout = poseidon_permutation_witness_layout();
+        let mut previous = preprocessed.memory[initial];
+        for hash_index in 0..hash_count {
+            let row_start = 2 + 41 * hash_index;
+            let witness_start = hash_index * POSEIDON_HASH_WITNESS_LEN;
+            let hash_witness =
+                &chain_witness.values[witness_start..witness_start + POSEIDON_HASH_WITNESS_LEN];
+            let first_output = write_poseidon_permutation_advice(
+                &mut columns,
+                row_start,
+                [previous, tail0_value, outer::Scalar::from(3)],
+                &hash_witness[..POSEIDON_PERMUTATION_WITNESS_LEN],
+                &layout,
+            )?;
+
+            let second_input0 = first_output[0] + tail1_value;
+            columns[0][row_start + 20] = second_input0;
+            columns[1][row_start + 20] = first_output[0];
+            columns[2][row_start + 20] = tail1_value;
+            let second_output = write_poseidon_permutation_advice(
+                &mut columns,
+                row_start + 21,
+                [second_input0, first_output[1], first_output[2]],
+                &hash_witness[POSEIDON_PERMUTATION_WITNESS_LEN..],
+                &layout,
+            )?;
+            previous = second_output[0];
+        }
+        columns
+    };
+    for (column, &value) in preprocessed.memory.iter().enumerate() {
+        columns[column][0] = value;
+    }
+    columns[0][1] = preprocessed.binding_input;
+
+    Ok(columns)
+}
+
+#[cfg(feature = "gpu-blitzar")]
+fn try_gpu_poseidon_chain(
+    instructions: &[I],
+    start: usize,
+    memory: &[Fr],
+) -> Option<Result<Vec<Fr>, ProvingError>> {
+    if !gpu_poseidon_cuda_backend_enabled() {
+        return None;
+    }
+    let [initial, tail0, tail1, len] = poseidon_chain_span(instructions, start, memory.len())?;
+    let min_len = std::env::var("MIDNIGHT_GPU_POSEIDON_MIN_CHAIN")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(64);
+    if len < min_len {
+        return None;
+    }
+
+    use midnight_circuits::hash::poseidon::constants::PoseidonField;
+    let mds = <outer::Scalar as PoseidonField>::MDS
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let round_constants = <outer::Scalar as PoseidonField>::ROUND_CONSTANTS
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let result = transient_crypto::proof_timer::timed(
+        "proof_server.prover.zkir.preprocess.poseidon_chain.gpu",
+        || {
+            midnight_curves::gpu_sppark::try_bls12_381_poseidon_hash_chain(
+                memory[initial].0,
+                memory[tail0].0,
+                memory[tail1].0,
+                outer::Scalar::from(3),
+                &mds,
+                &round_constants,
+                len,
+            )
+            .expect("GPU enablement changed during Poseidon preprocessing")
+            .map(|values| values.into_iter().map(Fr).collect())
+            .map_err(anyhow::Error::msg)
+        },
+    );
+    Some(result)
+}
+
 impl IrSource {
     /// Performs a non-ZK run of a circuit, to ensure that constraints hold, and
     /// to produce a public input vector, and public input skip information.
@@ -295,7 +645,49 @@ impl IrSource {
             bits.rev()
                 .fold(0.into(), |acc, bit| acc * 2.into() + bit.into())
         }
-        for ins in self.instructions.iter() {
+        #[cfg(feature = "gpu-blitzar")]
+        let mut poseidon_chain_witness = None;
+        #[cfg(not(feature = "gpu-blitzar"))]
+        let poseidon_chain_witness = None;
+        let mut instruction_index = 0usize;
+        while instruction_index < self.instructions.len() {
+            if let Some([_, _, _, len]) =
+                poseidon_chain_span(&self.instructions, instruction_index, memory.len())
+                && instruction_index + len == self.instructions.len()
+            {
+                #[cfg(feature = "gpu-blitzar")]
+                if instruction_index == 0
+                    && self.num_inputs == 3
+                    && !self.do_communications_commitment
+                    && cpu_poseidon_direct_advice_enabled(len)
+                {
+                    poseidon_chain_witness = Some(PoseidonChainWitness {
+                        instruction_start: 0,
+                        hash_count: len,
+                        values: Vec::new(),
+                        direct_cpu_advice: true,
+                    });
+                } else if let Some(result) =
+                    try_gpu_poseidon_chain_witness(&self.instructions, instruction_index, &memory)
+                {
+                    poseidon_chain_witness = Some(result?);
+                }
+                // A terminal pure hash chain has no externally observable preprocess output.
+                instruction_index += len;
+                continue;
+            }
+
+            #[cfg(feature = "gpu-blitzar")]
+            if let Some(result) =
+                try_gpu_poseidon_chain(&self.instructions, instruction_index, &memory)
+            {
+                let values = result?;
+                instruction_index += values.len();
+                memory.extend(values);
+                continue;
+            }
+
+            let ins = &self.instructions[instruction_index];
             trace!(?ins, "preprocess gate");
             let start_idx = memory.len();
             match ins {
@@ -469,6 +861,7 @@ impl IrSource {
                 )),
             }
             trace!(delta = ?memory[start_idx..], "Memory delta {}..{}", start_idx, memory.len());
+            instruction_index += 1;
         }
         trace!(?outputs, "Finished instructions with output");
         if preimage.public_transcript_inputs.len() != public_transcript_inputs_idx
@@ -509,6 +902,7 @@ impl IrSource {
             comm_comm: preimage
                 .communications_commitment
                 .map(|(comm, rand)| (comm.0, rand.0)),
+            poseidon_chain_witness,
         })
     }
 }
@@ -524,6 +918,129 @@ impl Relation for IrSource {
         instance: &Self::Instance,
     ) -> Result<Vec<outer::Scalar>, midnight_proofs::plonk::Error> {
         Ok(instance.clone())
+    }
+
+    #[cfg(feature = "gpu-blitzar")]
+    fn direct_resident_advice_values(
+        &self,
+        witness: Value<&Self::Witness>,
+        domain_len: usize,
+        num_advice_columns: usize,
+    ) -> Result<Value<Option<midnight_proofs::plonk::DirectResidentAdvice>>, Self::Error> {
+        use midnight_circuits::hash::poseidon::{
+            NB_POSEIDON_ADVICE_COLS, POSEIDON_HASH_WITNESS_LEN, constants::PoseidonField,
+            poseidon_permutation_witness_layout,
+        };
+
+        let chain = if gpu_poseidon_backend_enabled()
+            && resident_poseidon_advice_enabled(domain_len)
+            && self.num_inputs == 3
+            && !self.do_communications_commitment
+            && num_advice_columns == NB_POSEIDON_ADVICE_COLS
+        {
+            poseidon_chain_span(&self.instructions, 0, self.num_inputs as usize)
+                .filter(|[_, _, _, len]| *len == self.instructions.len())
+        } else {
+            None
+        };
+        let Some([initial, tail0, tail1, hash_count]) = chain else {
+            return Ok(Value::known(None));
+        };
+
+        witness.map_with_result(|preprocessed| {
+            transient_crypto::proof_timer::timed(
+                "proof_server.prover.zkir.advice.direct_poseidon_resident",
+                || {
+                    let chain_witness =
+                        preprocessed
+                            .poseidon_chain_witness
+                            .as_ref()
+                            .ok_or_else(|| {
+                                Error::Synthesis(
+                                    "terminal Poseidon circuit witness is missing".into(),
+                                )
+                            })?;
+                    if chain_witness.instruction_start != 0
+                        || chain_witness.hash_count != hash_count
+                    {
+                        return Err(Error::Synthesis(
+                            "terminal Poseidon circuit witness does not match the relation".into(),
+                        ));
+                    }
+                    let compact = if chain_witness.direct_cpu_advice {
+                        midnight_circuits::hash::poseidon::hash_chain_circuit_witness(
+                            preprocessed.memory[initial],
+                            preprocessed.memory[tail0],
+                            preprocessed.memory[tail1],
+                            hash_count,
+                        )
+                    } else {
+                        chain_witness.values.clone()
+                    };
+                    if compact.len() != hash_count * POSEIDON_HASH_WITNESS_LEN {
+                        return Err(Error::Synthesis(
+                            "terminal Poseidon circuit witness has the wrong length".into(),
+                        ));
+                    }
+                    let resident =
+                        midnight_proofs::plonk::DirectResidentAdvice::from_poseidon_hash_chain(
+                            &compact,
+                            hash_count,
+                            domain_len,
+                            [
+                                preprocessed.memory[0],
+                                preprocessed.memory[1],
+                                preprocessed.memory[2],
+                            ],
+                            preprocessed.binding_input,
+                            preprocessed.memory[initial],
+                            preprocessed.memory[tail0],
+                            preprocessed.memory[tail1],
+                            <outer::Scalar as PoseidonField>::ROUND_CONSTANTS[0],
+                            &poseidon_permutation_witness_layout(),
+                        )
+                        .map_err(Error::Backend)?;
+                    Ok(Some(resident))
+                },
+            )
+        })
+    }
+
+    fn direct_advice_values(
+        &self,
+        _witness: Value<&Self::Witness>,
+        _domain_len: usize,
+        _num_advice_columns: usize,
+    ) -> Result<Value<Option<Vec<Vec<outer::Scalar>>>>, Self::Error> {
+        #[cfg(feature = "gpu-blitzar")]
+        {
+            let chain = if gpu_poseidon_backend_enabled()
+                && self.num_inputs == 3
+                && !self.do_communications_commitment
+            {
+                poseidon_chain_span(&self.instructions, 0, self.num_inputs as usize)
+                    .filter(|[_, _, _, len]| *len == self.instructions.len())
+            } else {
+                None
+            };
+            if let Some(chain) = chain {
+                return _witness.map_with_result(|preprocessed| {
+                    transient_crypto::proof_timer::timed(
+                        "proof_server.prover.zkir.advice.direct_poseidon",
+                        || {
+                            terminal_poseidon_direct_advice(
+                                preprocessed,
+                                chain,
+                                _domain_len,
+                                _num_advice_columns,
+                            )
+                            .map(Some)
+                        },
+                    )
+                });
+            }
+        }
+        Ok(Value::known(None))
     }
 
     fn circuit(
@@ -603,215 +1120,276 @@ impl Relation for IrSource {
             let comm_comm = std.assign(layouter, comm_comm_value)?;
             pi_push(comm_comm, &mut public_inputs)?;
         }
-        for ins in self.instructions.iter() {
-            match ins {
-                I::Assert { cond } => std.assert_non_zero(layouter, idx(&memory, *cond)?)?,
-                I::CondSelect { bit, a, b } if self.version == IrMinorVersion::V0 => {
-                    let bit = std.is_zero(layouter, idx(&memory, *bit)?)?;
-                    // Note that b comes first here, because the is_zero negates the bit.
-                    // The negation is to ensure the bit bound. This may be
-                    // excessive, but user input could violate it otherwise.
-                    let result =
-                        std.select(layouter, &bit, idx(&memory, *b)?, idx(&memory, *a)?)?;
-                    mem_push(result, &mut memory)?;
+        #[cfg(feature = "gpu-blitzar")]
+        let gpu_terminal_chain = if gpu_poseidon_backend_enabled() {
+            poseidon_chain_span(&self.instructions, 0, memory.len())
+                .filter(|[_, _, _, len]| *len == self.instructions.len())
+        } else {
+            None
+        };
+        #[cfg(not(feature = "gpu-blitzar"))]
+        let gpu_terminal_chain: Option<[usize; 4]> = None;
+
+        if let Some([_, _, _, hash_count]) = gpu_terminal_chain {
+            use midnight_circuits::hash::poseidon::POSEIDON_HASH_WITNESS_LEN;
+
+            let chain_witness = witness.as_ref().map_with_result(|preproc| {
+                let chain = preproc.poseidon_chain_witness.as_ref().ok_or_else(|| {
+                    Error::Synthesis("CUDA Poseidon chain witness is missing".into())
+                })?;
+                if chain.instruction_start != 0 || chain.hash_count != hash_count {
+                    return Err(Error::Synthesis(
+                        "CUDA Poseidon chain witness does not match the circuit".into(),
+                    ));
                 }
-                I::CondSelect { bit, a, b } => {
-                    let bit: AssignedBit<_> = std.convert(layouter, idx(&memory, *bit)?)?;
-                    let result =
-                        std.select(layouter, &bit, idx(&memory, *a)?, idx(&memory, *b)?)?;
-                    mem_push(result, &mut memory)?;
-                }
-                I::ConstrainBits { var, bits } if self.version == IrMinorVersion::V0 => {
-                    drop(std.assigned_to_le_bits(
-                        layouter,
-                        idx(&memory, *var)?,
-                        Some(*bits as usize),
-                        *bits as usize >= FR_BITS,
-                    )?)
-                }
-                I::ConstrainBits { var, bits } => {
-                    if *bits < FR_BITS as u32 {
-                        let bound = BigUint::from(1u32) << *bits;
-                        std.assert_lower_than_fixed(layouter, idx(&memory, *var)?, &bound)?;
+                Ok(chain.values.as_slice())
+            })?;
+
+            for (hash_index, ins) in self.instructions.iter().enumerate() {
+                let I::TransientHash { inputs } = ins else {
+                    return Err(Error::Synthesis(
+                        "CUDA Poseidon chain contains a non-hash instruction".into(),
+                    ));
+                };
+                let inputs = inputs
+                    .iter()
+                    .map(|input| idx(&memory, *input).cloned())
+                    .collect::<Result<Vec<_>, _>>()?;
+                let witness_start = hash_index * POSEIDON_HASH_WITNESS_LEN;
+                let hash_witness = chain_witness.map(|values| {
+                    &values[witness_start..witness_start + POSEIDON_HASH_WITNESS_LEN]
+                });
+                let output = std.poseidon_with_circuit_witness(layouter, &inputs, hash_witness)?;
+                mem_push(output, &mut memory)?;
+            }
+        } else {
+            for ins in self.instructions.iter() {
+                match ins {
+                    I::Assert { cond } => std.assert_non_zero(layouter, idx(&memory, *cond)?)?,
+                    I::CondSelect { bit, a, b } if self.version == IrMinorVersion::V0 => {
+                        let bit = std.is_zero(layouter, idx(&memory, *bit)?)?;
+                        // Note that b comes first here, because the is_zero negates the bit.
+                        // The negation is to ensure the bit bound. This may be
+                        // excessive, but user input could violate it otherwise.
+                        let result =
+                            std.select(layouter, &bit, idx(&memory, *b)?, idx(&memory, *a)?)?;
+                        mem_push(result, &mut memory)?;
                     }
-                }
-                I::ConstrainEq { a, b } => {
-                    std.assert_equal(layouter, idx(&memory, *a)?, idx(&memory, *b)?)?
-                }
-                I::ConstrainToBoolean { var } => {
-                    // Yes, this does insert a constraint.
-                    let _: AssignedBit<_> = std.convert(layouter, idx(&memory, *var)?)?;
-                }
-                I::Copy { var } => mem_push(idx(&memory, *var)?.clone(), &mut memory)?,
-                I::DeclarePubInput { var } => {
-                    pi_push(idx(&memory, *var)?.clone(), &mut public_inputs)?
-                }
-                I::PiSkip { .. } => {}
-                I::LoadImm { imm } => mem_push(std.assign_fixed(layouter, imm.0)?, &mut memory)?,
-                I::Output { var } => outputs.push(idx(&memory, *var)?.clone()),
-                I::TransientHash { inputs } => mem_push(
-                    std.poseidon(
-                        layouter,
-                        &inputs
-                            .iter()
-                            .map(|inp| idx(&memory, *inp).cloned())
-                            .collect::<Result<Vec<_>, _>>()?,
-                    )?,
-                    &mut memory,
-                )?,
-                I::PersistentHash { alignment, inputs } => {
-                    let inputs = inputs
-                        .iter()
-                        .map(|i| idx(&memory, *i).cloned())
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let bytes = fab_decode_to_bytes(std, layouter, alignment, &inputs)?;
-                    let res_bytes = std.sha2_256(layouter, &bytes)?;
-                    mem_push(std.convert(layouter, &res_bytes[31])?, &mut memory)?;
-                    mem_push(
-                        assemble_bytes(std, layouter, &res_bytes[..31])?,
+                    I::CondSelect { bit, a, b } => {
+                        let bit: AssignedBit<_> = std.convert(layouter, idx(&memory, *bit)?)?;
+                        let result =
+                            std.select(layouter, &bit, idx(&memory, *a)?, idx(&memory, *b)?)?;
+                        mem_push(result, &mut memory)?;
+                    }
+                    I::ConstrainBits { var, bits } if self.version == IrMinorVersion::V0 => {
+                        drop(std.assigned_to_le_bits(
+                            layouter,
+                            idx(&memory, *var)?,
+                            Some(*bits as usize),
+                            *bits as usize >= FR_BITS,
+                        )?)
+                    }
+                    I::ConstrainBits { var, bits } => {
+                        if *bits < FR_BITS as u32 {
+                            let bound = BigUint::from(1u32) << *bits;
+                            std.assert_lower_than_fixed(layouter, idx(&memory, *var)?, &bound)?;
+                        }
+                    }
+                    I::ConstrainEq { a, b } => {
+                        std.assert_equal(layouter, idx(&memory, *a)?, idx(&memory, *b)?)?
+                    }
+                    I::ConstrainToBoolean { var } => {
+                        // Yes, this does insert a constraint.
+                        let _: AssignedBit<_> = std.convert(layouter, idx(&memory, *var)?)?;
+                    }
+                    I::Copy { var } => mem_push(idx(&memory, *var)?.clone(), &mut memory)?,
+                    I::DeclarePubInput { var } => {
+                        pi_push(idx(&memory, *var)?.clone(), &mut public_inputs)?
+                    }
+                    I::PiSkip { .. } => {}
+                    I::LoadImm { imm } => {
+                        mem_push(std.assign_fixed(layouter, imm.0)?, &mut memory)?
+                    }
+                    I::Output { var } => outputs.push(idx(&memory, *var)?.clone()),
+                    I::TransientHash { inputs } => mem_push(
+                        std.poseidon(
+                            layouter,
+                            &inputs
+                                .iter()
+                                .map(|inp| idx(&memory, *inp).cloned())
+                                .collect::<Result<Vec<_>, _>>()?,
+                        )?,
                         &mut memory,
-                    )?;
-                }
-                I::TestEq { a, b } => {
-                    let bit = std.is_equal(layouter, idx(&memory, *a)?, idx(&memory, *b)?)?;
-                    mem_push(std.convert(layouter, &bit)?, &mut memory)?;
-                }
-                I::Add { a, b } => mem_push(
-                    std.add(layouter, idx(&memory, *a)?, idx(&memory, *b)?)?,
-                    &mut memory,
-                )?,
-                I::Mul { a, b } => mem_push(
-                    std.mul(layouter, idx(&memory, *a)?, idx(&memory, *b)?, None)?,
-                    &mut memory,
-                )?,
-                I::Neg { a } => mem_push(std.neg(layouter, idx(&memory, *a)?)?, &mut memory)?,
-                I::Not { a } => mem_push(lnot(std, layouter, idx(&memory, *a)?)?, &mut memory)?,
-                I::LessThan { a, b, bits } => {
-                    // Adding mod 2 to meet library constraint that this is even
-                    // Hidden req that this is >= 4
-                    let bit = std.lower_than(
-                        layouter,
-                        idx(&memory, *a)?,
-                        idx(&memory, *b)?,
-                        u32::max(*bits + *bits % 2, 4),
-                    )?;
-                    mem_push(std.convert(layouter, &bit)?, &mut memory)?;
-                }
-                I::PublicInput { guard } | I::PrivateInput { guard } => {
-                    let guard = guard.map(|guard| idx(&memory, guard)).transpose()?;
-                    witness.error_if_known_and(|preproc| memory.len() > preproc.memory.len())?;
-                    let value = witness.as_ref().map(|preproc| preproc.memory[memory.len()]);
-                    let value_cell = std.assign(layouter, value)?;
-                    // If `guard` is Some, then we want to ensure that
-                    // `value` is 0 if `guard` is 0
-                    // That is: guard == 0 -> value == 0
-                    // => value == 0 || guard
-                    if let Some(guard) = guard {
-                        let value_is_zero = std.is_zero(layouter, &value_cell)?;
-                        let guard_bit = std.convert(layouter, guard)?;
-                        let is_ok = std.or(layouter, &[value_is_zero, guard_bit])?;
-                        let is_ok_field = std.convert(layouter, &is_ok)?;
-                        std.assert_non_zero(layouter, &is_ok_field)?;
+                    )?,
+                    I::PersistentHash { alignment, inputs } => {
+                        let inputs = inputs
+                            .iter()
+                            .map(|i| idx(&memory, *i).cloned())
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let bytes = fab_decode_to_bytes(std, layouter, alignment, &inputs)?;
+                        let res_bytes = std.sha2_256(layouter, &bytes)?;
+                        mem_push(std.convert(layouter, &res_bytes[31])?, &mut memory)?;
+                        mem_push(
+                            assemble_bytes(std, layouter, &res_bytes[..31])?,
+                            &mut memory,
+                        )?;
                     }
-                    mem_push(value_cell, &mut memory)?;
-                }
-                I::DivModPowerOfTwo { var, bits } => {
-                    let var = idx(&memory, *var)?;
-                    let var_bits = std.assigned_to_le_bits(layouter, var, None, true)?;
-                    let modulus =
-                        std.assigned_from_le_bits(layouter, &var_bits[..*bits as usize])?;
+                    I::TestEq { a, b } => {
+                        let bit = std.is_equal(layouter, idx(&memory, *a)?, idx(&memory, *b)?)?;
+                        mem_push(std.convert(layouter, &bit)?, &mut memory)?;
+                    }
+                    I::Add { a, b } => mem_push(
+                        std.add(layouter, idx(&memory, *a)?, idx(&memory, *b)?)?,
+                        &mut memory,
+                    )?,
+                    I::Mul { a, b } => mem_push(
+                        std.mul(layouter, idx(&memory, *a)?, idx(&memory, *b)?, None)?,
+                        &mut memory,
+                    )?,
+                    I::Neg { a } => mem_push(std.neg(layouter, idx(&memory, *a)?)?, &mut memory)?,
+                    I::Not { a } => mem_push(lnot(std, layouter, idx(&memory, *a)?)?, &mut memory)?,
+                    I::LessThan { a, b, bits } => {
+                        // Adding mod 2 to meet library constraint that this is even
+                        // Hidden req that this is >= 4
+                        let bit = std.lower_than(
+                            layouter,
+                            idx(&memory, *a)?,
+                            idx(&memory, *b)?,
+                            u32::max(*bits + *bits % 2, 4),
+                        )?;
+                        mem_push(std.convert(layouter, &bit)?, &mut memory)?;
+                    }
+                    I::PublicInput { guard } | I::PrivateInput { guard } => {
+                        let guard = guard.map(|guard| idx(&memory, guard)).transpose()?;
+                        witness
+                            .error_if_known_and(|preproc| memory.len() > preproc.memory.len())?;
+                        let value = witness.as_ref().map(|preproc| preproc.memory[memory.len()]);
+                        let value_cell = std.assign(layouter, value)?;
+                        // If `guard` is Some, then we want to ensure that
+                        // `value` is 0 if `guard` is 0
+                        // That is: guard == 0 -> value == 0
+                        // => value == 0 || guard
+                        if let Some(guard) = guard {
+                            let value_is_zero = std.is_zero(layouter, &value_cell)?;
+                            let guard_bit = std.convert(layouter, guard)?;
+                            let is_ok = std.or(layouter, &[value_is_zero, guard_bit])?;
+                            let is_ok_field = std.convert(layouter, &is_ok)?;
+                            std.assert_non_zero(layouter, &is_ok_field)?;
+                        }
+                        mem_push(value_cell, &mut memory)?;
+                    }
+                    I::DivModPowerOfTwo { var, bits } => {
+                        let var = idx(&memory, *var)?;
+                        let var_bits = std.assigned_to_le_bits(layouter, var, None, true)?;
+                        let modulus =
+                            std.assigned_from_le_bits(layouter, &var_bits[..*bits as usize])?;
 
-                    let divisor =
-                        std.assigned_from_le_bits(layouter, &var_bits[*bits as usize..])?;
+                        let divisor =
+                            std.assigned_from_le_bits(layouter, &var_bits[*bits as usize..])?;
 
-                    mem_push(divisor, &mut memory)?;
-                    mem_push(modulus, &mut memory)?;
-                }
-                I::ReconstituteField {
-                    divisor,
-                    modulus,
-                    bits,
-                } if self.version == IrMinorVersion::V0 => {
-                    let divisor_bits = std.assigned_to_le_bits(
-                        layouter,
-                        idx(&memory, *divisor)?,
-                        Some(FR_BITS - *bits as usize),
-                        *bits as usize >= FR_BITS,
-                    )?;
-                    let modulus_bits = std.assigned_to_le_bits(
-                        layouter,
-                        idx(&memory, *modulus)?,
-                        Some(*bits as usize),
-                        true,
-                    )?;
+                        mem_push(divisor, &mut memory)?;
+                        mem_push(modulus, &mut memory)?;
+                    }
+                    I::ReconstituteField {
+                        divisor,
+                        modulus,
+                        bits,
+                    } if self.version == IrMinorVersion::V0 => {
+                        let divisor_bits = std.assigned_to_le_bits(
+                            layouter,
+                            idx(&memory, *divisor)?,
+                            Some(FR_BITS - *bits as usize),
+                            *bits as usize >= FR_BITS,
+                        )?;
+                        let modulus_bits = std.assigned_to_le_bits(
+                            layouter,
+                            idx(&memory, *modulus)?,
+                            Some(*bits as usize),
+                            true,
+                        )?;
 
-                    let reconstituted = std
-                        .assigned_from_le_bits(layouter, &[modulus_bits, divisor_bits].concat())?;
-                    mem_push(reconstituted, &mut memory)?;
-                }
-                I::ReconstituteField {
-                    divisor,
-                    modulus,
-                    bits,
-                } => {
-                    let modulus = idx(&memory, *modulus)?.clone();
-                    let divisor = idx(&memory, *divisor)?.clone();
+                        let reconstituted = std.assigned_from_le_bits(
+                            layouter,
+                            &[modulus_bits, divisor_bits].concat(),
+                        )?;
+                        mem_push(reconstituted, &mut memory)?;
+                    }
+                    I::ReconstituteField {
+                        divisor,
+                        modulus,
+                        bits,
+                    } => {
+                        let modulus = idx(&memory, *modulus)?.clone();
+                        let divisor = idx(&memory, *divisor)?.clone();
 
-                    std.assert_lower_than_fixed(
-                        layouter,
-                        &divisor,
-                        &(BigUint::from(1u32) << (FR_BITS as u32 - *bits)),
-                    )?;
-                    std.assert_lower_than_fixed(
-                        layouter,
-                        &modulus,
-                        &(BigUint::from(1u32) << *bits),
-                    )?;
+                        std.assert_lower_than_fixed(
+                            layouter,
+                            &divisor,
+                            &(BigUint::from(1u32) << (FR_BITS as u32 - *bits)),
+                        )?;
+                        std.assert_lower_than_fixed(
+                            layouter,
+                            &modulus,
+                            &(BigUint::from(1u32) << *bits),
+                        )?;
 
-                    let reconstituted = std.linear_combination(
-                        layouter,
-                        &[
-                            (outer::Scalar::from(1), modulus),
-                            (outer::Scalar::from(2).pow([*bits as u64]), divisor),
-                        ],
-                        outer::Scalar::from(0),
-                    )?;
-                    mem_push(reconstituted, &mut memory)?;
-                }
-                I::EcAdd { a_x, a_y, b_x, b_y } => {
-                    let a =
-                        ecc_from_parts(std, layouter, idx(&memory, *a_x)?, idx(&memory, *a_y)?)?;
-                    let b =
-                        ecc_from_parts(std, layouter, idx(&memory, *b_x)?, idx(&memory, *b_y)?)?;
-                    let c = EccInstructions::add(std.jubjub(), layouter, &a, &b)?;
-                    mem_push(std.jubjub().x_coordinate(&c), &mut memory)?;
-                    mem_push(std.jubjub().y_coordinate(&c), &mut memory)?;
-                }
-                I::EcMul { a_x, a_y, scalar } => {
-                    let a =
-                        ecc_from_parts(std, layouter, idx(&memory, *a_x)?, idx(&memory, *a_y)?)?;
-                    let scalar = std.jubjub().convert(layouter, idx(&memory, *scalar)?)?;
-                    let b = std.jubjub().msm(layouter, &[scalar], &[a])?;
-                    mem_push(std.jubjub().x_coordinate(&b), &mut memory)?;
-                    mem_push(std.jubjub().y_coordinate(&b), &mut memory)?;
-                }
-                I::EcMulGenerator { scalar } => {
-                    let g: AssignedNativePoint<embedded::AffineExtended> = std
-                        .jubjub()
-                        .assign_fixed(layouter, embedded::Affine::generator())?;
-                    let scalar = std.jubjub().convert(layouter, idx(&memory, *scalar)?)?;
-                    let b = std.jubjub().msm(layouter, &[scalar], &[g])?;
-                    mem_push(std.jubjub().x_coordinate(&b), &mut memory)?;
-                    mem_push(std.jubjub().y_coordinate(&b), &mut memory)?;
-                }
-                I::HashToCurve { inputs } => {
-                    let inputs = inputs
-                        .iter()
-                        .map(|input| idx(&memory, *input).cloned())
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let point = std.hash_to_curve(layouter, &inputs)?;
-                    mem_push(std.jubjub().x_coordinate(&point), &mut memory)?;
-                    mem_push(std.jubjub().y_coordinate(&point), &mut memory)?;
+                        let reconstituted = std.linear_combination(
+                            layouter,
+                            &[
+                                (outer::Scalar::from(1), modulus),
+                                (outer::Scalar::from(2).pow([*bits as u64]), divisor),
+                            ],
+                            outer::Scalar::from(0),
+                        )?;
+                        mem_push(reconstituted, &mut memory)?;
+                    }
+                    I::EcAdd { a_x, a_y, b_x, b_y } => {
+                        let a = ecc_from_parts(
+                            std,
+                            layouter,
+                            idx(&memory, *a_x)?,
+                            idx(&memory, *a_y)?,
+                        )?;
+                        let b = ecc_from_parts(
+                            std,
+                            layouter,
+                            idx(&memory, *b_x)?,
+                            idx(&memory, *b_y)?,
+                        )?;
+                        let c = EccInstructions::add(std.jubjub(), layouter, &a, &b)?;
+                        mem_push(std.jubjub().x_coordinate(&c), &mut memory)?;
+                        mem_push(std.jubjub().y_coordinate(&c), &mut memory)?;
+                    }
+                    I::EcMul { a_x, a_y, scalar } => {
+                        let a = ecc_from_parts(
+                            std,
+                            layouter,
+                            idx(&memory, *a_x)?,
+                            idx(&memory, *a_y)?,
+                        )?;
+                        let scalar = std.jubjub().convert(layouter, idx(&memory, *scalar)?)?;
+                        let b = std.jubjub().msm(layouter, &[scalar], &[a])?;
+                        mem_push(std.jubjub().x_coordinate(&b), &mut memory)?;
+                        mem_push(std.jubjub().y_coordinate(&b), &mut memory)?;
+                    }
+                    I::EcMulGenerator { scalar } => {
+                        let g: AssignedNativePoint<embedded::AffineExtended> = std
+                            .jubjub()
+                            .assign_fixed(layouter, embedded::Affine::generator())?;
+                        let scalar = std.jubjub().convert(layouter, idx(&memory, *scalar)?)?;
+                        let b = std.jubjub().msm(layouter, &[scalar], &[g])?;
+                        mem_push(std.jubjub().x_coordinate(&b), &mut memory)?;
+                        mem_push(std.jubjub().y_coordinate(&b), &mut memory)?;
+                    }
+                    I::HashToCurve { inputs } => {
+                        let inputs = inputs
+                            .iter()
+                            .map(|input| idx(&memory, *input).cloned())
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let point = std.hash_to_curve(layouter, &inputs)?;
+                        mem_push(std.jubjub().x_coordinate(&point), &mut memory)?;
+                        mem_push(std.jubjub().y_coordinate(&point), &mut memory)?;
+                    }
                 }
             }
         }
