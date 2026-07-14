@@ -3,7 +3,8 @@ target
 result
 *.node
 node_modules
-reports
+/reports/*
+!/reports/*.md
 dist
 .idea/
 .direnv/
