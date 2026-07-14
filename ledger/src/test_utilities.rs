@@ -701,7 +701,7 @@ pub fn test_resolver(test_name: &'static str) -> Resolver {
                     return Ok(None);
                 };
                 Ok(Some(ProvingKeyMaterial {
-                    prover_key,
+                    prover_key: prover_key.into(),
                     verifier_key,
                     ir_source,
                 }))

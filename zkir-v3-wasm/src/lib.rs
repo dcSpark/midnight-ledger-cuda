@@ -131,7 +131,7 @@ impl Resolver for JsKeyProvider {
         let verifier_key = getprop("verifierKey")?;
         let ir_source = getprop("ir")?;
         Ok(Some(ProvingKeyMaterial {
-            prover_key,
+            prover_key: prover_key.into(),
             verifier_key,
             ir_source,
         }))

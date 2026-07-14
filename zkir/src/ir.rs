@@ -136,19 +136,7 @@ impl Zkir for IrSource {
                     "V0/V1 circuits must use transient_crypto_old::proofs::Zkir for proving"
                 )
             }
-            IrMinorVersion::V2 => {
-                let inner_pk = pk
-                    .init()
-                    .map_err(|e| anyhow::anyhow!("Could not init pk: {e:?}"))?;
-                use midnight_zk_stdlib::prove;
-                let params_k = params.get_params(inner_pk.k()).await?;
-                let preproc = self.preprocess(preimage)?;
-                let pis = preproc.pis.clone();
-                let pi_skips = preproc.pi_skips.clone();
-                let proof =
-                    prove::<_, TranscriptHash>(params_k.as_ref(), &inner_pk, self, &pis, preproc, rng)?;
-                Ok((Proof(proof), pis.into_iter().map(Fr).collect(), pi_skips))
-            }
+            IrMinorVersion::V2 => self.v2_prove(rng, params, pk, preimage).await,
         }
     }
 
@@ -541,6 +529,40 @@ impl Model {
 }
 
 impl IrSource {
+    /// Proves this relation with the current zk-stdlib/PLONK stack regardless
+    /// of its compatibility-dispatch version.
+    ///
+    /// The relation's version is not changed, so legacy instruction semantics
+    /// remain intact. The proving key must have been produced by [`Self::v2_keygen`].
+    pub async fn v2_prove(
+        &self,
+        rng: impl Rng + CryptoRng,
+        params: &impl ParamsProverProvider,
+        pk: ProverKey<Self>,
+        preimage: &ProofPreimage,
+    ) -> Result<(Proof, Vec<Fr>, Vec<Option<usize>>), ProvingError> {
+        let inner_pk =
+            transient_crypto::proof_timer::timed("proof_server.prover.zkir.prove.init_pk", || {
+                pk.init()
+                    .map_err(|e| anyhow::anyhow!("Could not init pk: {e:?}"))
+            })?;
+        use midnight_zk_stdlib::prove;
+        let params_k = transient_crypto::proof_timer::timed_async(
+            "proof_server.prover.zkir.prove.params",
+            params.get_params(inner_pk.k()),
+        )
+        .await?;
+        let preproc =
+            transient_crypto::proof_timer::timed("proof_server.prover.zkir.preprocess", || {
+                self.preprocess(preimage)
+            })?;
+        let pis = preproc.pis.clone();
+        let pi_skips = preproc.pi_skips.clone();
+        let proof =
+            prove::<_, TranscriptHash>(params_k.as_ref(), &inner_pk, self, &pis, preproc, rng)?;
+        Ok((Proof(proof), pis.into_iter().map(Fr).collect(), pi_skips))
+    }
+
     /// v2 (zk-stdlib v2) key generation. Not the default; use `Zkir::keygen` for v1.
     pub async fn v2_keygen(
         &self,

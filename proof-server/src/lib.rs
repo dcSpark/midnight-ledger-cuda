@@ -26,14 +26,26 @@ use crate::endpoints::{
 use crate::worker_pool::WorkerPool;
 
 pub mod endpoints;
+pub mod perf_ranges;
+pub mod prover_backend;
 pub mod versioned_ir;
 pub mod worker_pool;
 
 pub fn server(port: u16, fetch_params: bool, pool: WorkerPool) -> std::io::Result<(Server, u16)> {
+    server_with_backend(port, fetch_params, pool, prover_backend::ProverBackend::Cpu)
+}
+
+pub fn server_with_backend(
+    port: u16,
+    fetch_params: bool,
+    pool: WorkerPool,
+    prover_backend: prover_backend::ProverBackend,
+) -> std::io::Result<(Server, u16)> {
     let pool = Arc::new(pool);
     let http_server = HttpServer::new(move || {
         let app = App::new()
             .app_data(Data::new(pool.clone()))
+            .app_data(Data::new(prover_backend))
             .service(prove_transaction)
             .service(prove)
             .service(check)

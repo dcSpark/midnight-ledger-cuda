@@ -17,10 +17,12 @@ use base_crypto::rng::SplittableRng;
 use futures::future::join_all;
 use rand::{CryptoRng, Rng};
 use serialize::{Deserializable, tagged_deserialize, tagged_serialize};
+use std::collections::HashMap;
 use std::fs::File;
 use std::future::Future;
 use std::io::{BufReader, Read};
 use std::sync::Arc;
+use std::sync::{LazyLock, Mutex};
 use storage::db::DB;
 use transient_crypto::proofs::{
     KeyLocation, ParamsProverProvider, Proof, ProofPreimage, ProverKey, ProvingError, Resolver,
@@ -30,6 +32,9 @@ use transient_crypto::proofs::{ParamsProver, ProvingKeyMaterial, ProvingProvider
 
 #[derive(Clone)]
 pub struct ZswapResolver(pub MidnightDataProvider);
+
+static PARAMS_CACHE: LazyLock<Mutex<HashMap<(std::path::PathBuf, u8), ParamsProver>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 impl Resolver for ZswapResolver {
     async fn resolve_key(&self, key: KeyLocation) -> std::io::Result<Option<ProvingKeyMaterial>> {
@@ -75,7 +80,7 @@ impl Resolver for ZswapResolver {
                 .await?,
         )?;
         Ok(Some(ProvingKeyMaterial {
-            prover_key,
+            prover_key: prover_key.into(),
             verifier_key,
             ir_source,
         }))
@@ -84,7 +89,22 @@ impl Resolver for ZswapResolver {
 
 impl ParamsProverProvider for ZswapResolver {
     async fn get_params(&self, k: u8) -> std::io::Result<ParamsProver> {
-        self.0.get_params(k).await
+        let key = (self.0.dir.clone(), k);
+        if let Some(params) = PARAMS_CACHE
+            .lock()
+            .expect("params cache poisoned")
+            .get(&key)
+            .cloned()
+        {
+            return Ok(params);
+        }
+
+        let params = self.0.get_params(k).await?;
+        PARAMS_CACHE
+            .lock()
+            .expect("params cache poisoned")
+            .insert(key, params.clone());
+        Ok(params)
     }
 }
 

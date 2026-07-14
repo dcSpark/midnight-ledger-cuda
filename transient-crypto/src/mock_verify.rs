@@ -205,7 +205,7 @@ pub fn calibrate_for(path: PathBuf) -> Calibration {
             let mut ir = Vec::new();
             tagged_serialize(&self.ir, &mut ir)?;
             Ok(Some(ProvingKeyMaterial {
-                prover_key: pk,
+                prover_key: pk.into(),
                 verifier_key: vk,
                 ir_source: ir,
             }))

@@ -128,7 +128,7 @@ impl transient_crypto_old::proofs::Resolver for JsKeyProvider {
         let pkm = <Self as Resolver>::resolve_key(self, KeyLocation(key.0)).await?;
         Ok(
             pkm.map(|pkm| transient_crypto_old::proofs::ProvingKeyMaterial {
-                prover_key: pkm.prover_key,
+                prover_key: (*pkm.prover_key).clone(),
                 verifier_key: pkm.verifier_key,
                 ir_source: pkm.ir_source,
             }),
@@ -178,7 +178,7 @@ impl Resolver for JsKeyProvider {
         let verifier_key = getprop("verifierKey")?;
         let ir_source = getprop("ir")?;
         Ok(Some(ProvingKeyMaterial {
-            prover_key,
+            prover_key: prover_key.into(),
             verifier_key,
             ir_source,
         }))
