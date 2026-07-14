@@ -12,6 +12,9 @@ lib-sources
 coverage
 *.tsbuildinfo
 logs
+benchmark-results/
+__pycache__/
+*.py[cod]
 **/.yarn/install-state.gz
 **/.yarn/cache
 .midnight-pp
