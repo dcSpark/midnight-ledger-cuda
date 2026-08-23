@@ -1,0 +1,51 @@
+[package]
+name = "midnight-metal-prover"
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+version = "9.0.0-rc.3"
+publish = false
+build = "build.rs"
+
+[features]
+default = []
+metal-diagnostics = ["bls12-381-metal-msm/metal-diagnostics"]
+
+[dependencies]
+blst = "0.3.16"
+sha2 = "0.11.0"
+thiserror = "2.0.18"
+
+[dev-dependencies]
+midnight-gpu-prover = { path = "../midnight-gpu-prover" }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+bls12-381-metal-msm = { path = "../bls12-381-metal-msm", features = ["metal"] }
+dispatch2 = { version = "0.3.1", default-features = false, features = ["block2", "std"] }
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSError",
+    "NSString",
+] }
+objc2-metal = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "MTLAllocation",
+    "MTLBuffer",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLCommandQueue",
+    "MTLComputeCommandEncoder",
+    "MTLComputePass",
+    "MTLComputePipeline",
+    "MTLCounters",
+    "MTLDevice",
+    "MTLLibrary",
+    "MTLResource",
+    "MTLTypes",
+    "dispatch2",
+] }
+zeroize = { version = "1.9.0", features = ["alloc"] }
