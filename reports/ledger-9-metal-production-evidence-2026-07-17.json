@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-17",
+  "claim": "production-default paired CPU versus metal-hybrid proof backend",
+  "platform": {
+    "architecture": "arm64",
+    "model": "MacBookPro18,2",
+    "chip": "Apple M1 Max",
+    "cpu_cores": 10,
+    "gpu_cores": 32,
+    "memory_gib": 64,
+    "macos": "26.5.2 (25F84)",
+    "metal": "Apple metal 32023.883"
+  },
+  "toolchain": {
+    "rustc": "1.95.0 (59807616e 2026-04-14)",
+    "llvm": "22.1.2",
+    "cargo_lock_sha256": "5a7d3851f1212c9722241c57c57f5b872e8ea4cfca54e4ece94d66b96e4feabf",
+    "acceptance_binary_sha256": "a3679df921e99ce9cdcdb4f21773e319a036a9a839fd2d7d2c0de5a03094ef9a"
+  },
+  "build": "cargo build --release -p midnight-proof-server --bin proof-backend-parity --features deterministic-test-rng,metal",
+  "fixture": {
+    "kind": "zswap-transaction",
+    "pipeline": "current-prover-generated-key",
+    "result_kind": "serialized-ledger-transaction",
+    "proof_jobs_per_transaction": 5,
+    "instructions": 1397,
+    "max_k": 15,
+    "aggregate_rows": 56950,
+    "logical_msm_outputs_per_transaction": 147,
+    "nonempty_metal_msm_outputs_per_transaction": 142,
+    "all_zero_identity_outputs_per_transaction": 5
+  },
+  "configuration": {
+    "backend": "cpu-metal-hybrid",
+    "execution_routes": ["cpu", "metal-hybrid"],
+    "seed": 24301,
+    "warmup": 2,
+    "acceleration_environment_overrides": [],
+    "metal_quotient_mode": "resident-substitution-with-host-opening",
+    "resident_quotient_commitments": true,
+    "combined_opening_materialized_to_host": true
+  },
+  "acceptance_20_pairs": {
+    "command": "MIDNIGHT_LEDGER_TEST_STATIC_DIR=$PWD/scripts target/release/proof-backend-parity --backend cpu-metal-hybrid --iterations 20 --warmup 2 --json /tmp/metal-production-final-paired20.json",
+    "raw_result_sha256": "874fb59d3ae0ef6d42e018a1eccf09ae25bc96e6d8a0eab586f7f63f7b158b59",
+    "byte_exact_transactions": 20,
+    "proofs_per_backend": 100,
+    "cpu_ms": {
+      "mean": 4565.406081,
+      "median": 4553.226542,
+      "p95": 4632.660791
+    },
+    "metal_ms": {
+      "mean": 1407.203662,
+      "median": 1404.858813,
+      "p95": 1426.223500
+    },
+    "speedup": {
+      "mean": 3.244311,
+      "median": 3.241056,
+      "p95_ratio": 3.248201
+    },
+    "native_command_buffers": 820,
+    "compute_dispatches": 8500,
+    "fallbacks": 0,
+    "metal_msm": {
+      "submissions": 767,
+      "outputs": 2840,
+      "failures": 0,
+      "policy_cpu_identity_outputs": 100,
+      "policy_cpu_nonzero_scalars": 0
+    },
+    "logical_transfers_bytes": {
+      "host_to_device": 2584827200,
+      "device_to_host": 676344320
+    },
+    "quotient": {
+      "epochs": 100,
+      "resident_msm_leases": 100,
+      "cpu_msm_leases": 0,
+      "whole_polynomial_materializations": 100,
+      "failures": 0,
+      "clear_failures": 0,
+      "poison_events": 0
+    }
+  },
+  "production_default_soak_100_pairs": {
+    "command": "MIDNIGHT_LEDGER_TEST_STATIC_DIR=$PWD/scripts target/release/proof-backend-parity --backend cpu-metal-hybrid --iterations 100 --warmup 2 --json /tmp/metal-production-final-reliability100.json",
+    "raw_result_sha256": "85d0b94a2a19a9da66f442c7aeaf3c37774717b955ff5e18df410f4ff2ea3019",
+    "byte_exact_transactions": 100,
+    "proofs_per_backend": 500,
+    "cpu_ms": {
+      "mean": 4678.557553,
+      "median": 4583.512396,
+      "p95": 5087.573875
+    },
+    "metal_ms": {
+      "mean": 1408.489391,
+      "median": 1403.523959,
+      "p95": 1454.612166
+    },
+    "speedup": {
+      "mean": 3.321685,
+      "median": 3.265717,
+      "p95_ratio": 3.497547
+    },
+    "native_command_buffers": 4100,
+    "compute_dispatches": 42500,
+    "fallbacks": 0,
+    "metal_msm": {
+      "submissions": 3797,
+      "outputs": 14200,
+      "failures": 0,
+      "policy_cpu_identity_outputs": 500,
+      "policy_cpu_nonzero_scalars": 0
+    },
+    "logical_transfers_bytes": {
+      "host_to_device": 12924136000,
+      "device_to_host": 3381721600
+    },
+    "quotient": {
+      "epochs": 500,
+      "resident_msm_leases": 500,
+      "cpu_msm_leases": 0,
+      "whole_polynomial_materializations": 500,
+      "failures": 0,
+      "clear_failures": 0,
+      "quarantined_secret_bytes": 0,
+      "poison_events": 0
+    }
+  },
+  "theoretical_ceiling": {
+    "kind": "infinite-device Amdahl structural upper bound",
+    "speedup": 10.2,
+    "estimated_remaining_host_ms": 512,
+    "hardware_forecast": false
+  }
+}
