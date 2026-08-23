@@ -345,6 +345,7 @@ pub(crate) async fn prove(
 #[post("/prove-tx")]
 pub(crate) async fn prove_transaction(
     pool: Data<Arc<WorkerPool>>,
+    backend: Data<ProverBackend>,
     payload: Payload,
 ) -> Result<HttpResponse, Error> {
     info!("Starting to process request for /prove-tx...");
@@ -355,12 +356,16 @@ pub(crate) async fn prove_transaction(
     );
     let (tx, keys): TransactionProvePayload<Signature> =
         tagged_deserialize(&request[..]).map_err(ErrorBadRequest)?;
+    let prover_backend = *backend.get_ref();
     let (_id, updates) = pool
         .submit_and_subscribe(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .build()
                 .unwrap();
             rt.block_on(async move {
+                let _execution = prover_backend
+                    .enter_proof_execution()
+                    .map_err(|error| WorkError::InternalError(error.to_string()))?;
                 let mut response = Vec::new();
                 let resolver = Resolver::new(
                     PUBLIC_PARAMS.clone(),

@@ -72,10 +72,7 @@ pub(crate) async fn prove_with_backend(
     ir_source: &[u8],
     resolver: &Resolver,
 ) -> Result<(Proof, Vec<Option<usize>>), String> {
-    backend.ensure_available().map_err(|e| e.to_string())?;
-    #[cfg(feature = "gpu-blitzar")]
-    let _gpu_blitzar =
-        transient_crypto::proofs::GpuBlitzarGuard::set(backend == ProverBackend::Cuda);
+    let _execution = backend.enter_proof_execution().map_err(|e| e.to_string())?;
     prove_inner(ppi, ir_source, resolver, OsRng).await
 }
 
@@ -95,8 +92,8 @@ pub async fn prove_with_rng<R>(
 where
     R: Rng + CryptoRng + SplittableRng,
 {
-    ProverBackend::Cpu
-        .ensure_available()
+    let _execution = ProverBackend::Cpu
+        .enter_proof_execution()
         .map_err(|e| e.to_string())?;
     prove_inner(ppi, ir_source, resolver, rng).await
 }
@@ -113,10 +110,7 @@ pub async fn prove_with_backend_and_rng<R>(
 where
     R: Rng + CryptoRng + SplittableRng,
 {
-    backend.ensure_available().map_err(|e| e.to_string())?;
-    #[cfg(feature = "gpu-blitzar")]
-    let _gpu_blitzar =
-        transient_crypto::proofs::GpuBlitzarGuard::set(backend == ProverBackend::Cuda);
+    let _execution = backend.enter_proof_execution().map_err(|e| e.to_string())?;
     prove_inner(ppi, ir_source, resolver, rng).await
 }
 
@@ -136,10 +130,7 @@ pub async fn prove_current_ir_with_backend_and_rng<R>(
 where
     R: Rng + CryptoRng + SplittableRng,
 {
-    backend.ensure_available().map_err(|e| e.to_string())?;
-    #[cfg(feature = "gpu-blitzar")]
-    let _gpu_blitzar =
-        transient_crypto::proofs::GpuBlitzarGuard::set(backend == ProverBackend::Cuda);
+    let _execution = backend.enter_proof_execution().map_err(|e| e.to_string())?;
     let provider = zkir_v2::LocalProvingProvider {
         rng,
         resolver,

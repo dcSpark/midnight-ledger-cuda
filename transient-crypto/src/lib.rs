@@ -20,6 +20,11 @@
 //! data structures are defined here, and should be added here to decouple from
 //! any specific implementation.
 
+#[cfg(all(feature = "gpu-blitzar", feature = "gpu-metal"))]
+compile_error!(
+    "resident CUDA and Metal are separate build lanes; do not enable `gpu-blitzar` and `gpu-metal` together"
+);
+
 #[macro_use]
 extern crate tracing;
 
