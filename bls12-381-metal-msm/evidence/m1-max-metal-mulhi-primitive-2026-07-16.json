@@ -1,0 +1,322 @@
+{
+  "schema": "bls12-381-metal-msm.metal-mulhi-primitive.v1",
+  "status": "no_go_for_mulhi_substitution",
+  "measurement_date": "2026-07-16",
+  "decision_scope": "On this Apple M1 Max and Apple Metal compiler, replacing each widened unsigned 32x32-to-64 expression with a separate low u32 multiply plus metal::mulhi(uint,uint) is not a credible rescue for the direct AMNS8/K8 field topology. This prunes only that prioritization hypothesis and is not a formal AMNS8-v2 complete-field NO_GO. It does not reject materially different hierarchical arithmetic, other schedules, other representations, or other Apple GPU generations.",
+  "device": {
+    "name": "Apple M1 Max",
+    "registry_id": 4294970105,
+    "gpu_cores": 32,
+    "metal_support": "Metal 4",
+    "thread_execution_width": 32
+  },
+  "environment": {
+    "macos_product_version": "26.5.2",
+    "macos_build_version": "25F84",
+    "apple_metal_compiler": "32023.883 (metalfe-32023.883)",
+    "metal_target": "air64-apple-darwin25.5.0",
+    "metal_language_standard": "metal3.0",
+    "metal_deployment_target": "macOS 13.0",
+    "metal_optimization": "-fno-fast-math -O3",
+    "swift": "Apple Swift 6.3.3 (swiftlang-6.3.3.1.3 clang-2100.1.1.101)",
+    "swift_target": "arm64-apple-macosx26.0",
+    "swift_optimization": "-O"
+  },
+  "package_sources": {
+    "constant_rhs_msl": {
+      "file": "research/metal_mulhi_probe/constant_rhs.metal",
+      "sha256": "9c036d38df189105245a8dbe2556856fbf13c848449d7dcb9f642472123c537a"
+    },
+    "constant_rhs_swift": {
+      "file": "research/metal_mulhi_probe/constant_rhs.swift",
+      "sha256": "7859ee2f68e26c6b846008ce73d1c9f39a57dce3735e17d71fbd84c7ec106d79"
+    },
+    "rotating_two_state_msl": {
+      "file": "research/metal_mulhi_probe/rotating_two_state.metal",
+      "sha256": "67829be33ddd095dd30b46b84391cb8caca568ee06d0f92e247b7c50c4598a41"
+    },
+    "rotating_two_state_swift": {
+      "file": "research/metal_mulhi_probe/rotating_two_state.swift",
+      "sha256": "b3f24f5c2f2505b233a1b3b20cf9956a4d38eaf94692ced00b27300801fd0bd3"
+    },
+    "runner": {
+      "file": "research/metal_mulhi_probe/run.sh",
+      "sha256": "7bc983ca536a5de0fba40c7f8b2632727c77d9902c27d3b77f6cb3d63e4d39e1"
+    }
+  },
+  "measurement_artifacts": {
+    "constant_rhs": {
+      "optimized_air_sha256": "f0e9648331ea3660a44cbdaf1a2bbe8b1055eb643d90b277fe95ca6066619d13",
+      "metallib_sha256": "b1255540548c3c6147a9e0933fd9a51ae64fb98f29efc28fe4640a42609bb642",
+      "host_harness_sha256": "0d73c79f6c2a37fa6a461d81050dfa52ccaf7442f0a1ff0ea159f913a1917e0d"
+    },
+    "rotating_two_state": {
+      "optimized_air_sha256": "b245754676b44cd0c405519c1e51fc2c6ed153d2e0cb85631f53bd0a1d394409",
+      "metallib_sha256": "6162e648b7b4808472779bfde56862e08d853c48322879faeb55788f12da56d4",
+      "host_harness_sha256": "44aed66de31442f01036cfff6f30ab61eaa2580cbabdfb7baee084b7b4fff3d6"
+    },
+    "note": "These artifacts were compiled and measured from the package-owned sources with the runner's frozen Metal flags."
+  },
+  "packaged_path_reproduction_artifacts": {
+    "constant_rhs": {
+      "optimized_air_sha256": "f0e9648331ea3660a44cbdaf1a2bbe8b1055eb643d90b277fe95ca6066619d13",
+      "metallib_sha256": "b1255540548c3c6147a9e0933fd9a51ae64fb98f29efc28fe4640a42609bb642",
+      "host_harness_sha256": "0d73c79f6c2a37fa6a461d81050dfa52ccaf7442f0a1ff0ea159f913a1917e0d"
+    },
+    "rotating_two_state": {
+      "optimized_air_sha256": "b245754676b44cd0c405519c1e51fc2c6ed153d2e0cb85631f53bd0a1d394409",
+      "metallib_sha256": "6162e648b7b4808472779bfde56862e08d853c48322879faeb55788f12da56d4",
+      "host_harness_sha256": "44aed66de31442f01036cfff6f30ab61eaa2580cbabdfb7baee084b7b4fff3d6"
+    }
+  },
+  "optimized_air_audit": {
+    "constant_rhs": {
+      "check_mulhi": {
+        "instructions": 16,
+        "air_mul_hi_u_i32_calls": 1,
+        "mul_i32_sites": 1,
+        "mul_i64_sites": 0,
+        "loads": 2,
+        "stores": 1,
+        "allocas": 0,
+        "threadgroup_address_space_references": 0
+      },
+      "check_widened": {
+        "instructions": 20,
+        "air_mul_hi_u_i32_calls": 0,
+        "mul_i32_sites": 0,
+        "mul_i64_sites": 1,
+        "loads": 2,
+        "stores": 1,
+        "allocas": 0,
+        "threadgroup_address_space_references": 0
+      },
+      "bench_mulhi": {
+        "instructions": 26,
+        "air_mul_hi_u_i32_calls": 1,
+        "mul_i32_sites": 1,
+        "mul_i64_sites": 0,
+        "loads": 3,
+        "stores": 1,
+        "allocas": 0,
+        "threadgroup_address_space_references": 0
+      },
+      "bench_widened": {
+        "instructions": 29,
+        "air_mul_hi_u_i32_calls": 0,
+        "mul_i32_sites": 0,
+        "mul_i64_sites": 1,
+        "loads": 3,
+        "stores": 1,
+        "allocas": 0,
+        "threadgroup_address_space_references": 0
+      }
+    },
+    "rotating_two_state": {
+      "bench_rotating_mulhi": {
+        "instructions": 30,
+        "air_mul_hi_u_i32_calls": 1,
+        "mul_i32_sites": 1,
+        "mul_i64_sites": 0,
+        "loads": 3,
+        "stores": 1,
+        "allocas": 0,
+        "threadgroup_address_space_references": 0
+      },
+      "bench_rotating_widened": {
+        "instructions": 34,
+        "air_mul_hi_u_i32_calls": 0,
+        "mul_i32_sites": 0,
+        "mul_i64_sites": 1,
+        "loads": 3,
+        "stores": 1,
+        "allocas": 0,
+        "threadgroup_address_space_references": 0
+      }
+    },
+    "interpretation": "The optimized AIR retains distinct operations. The explicit path performs one low i32 multiply plus one air.mul_hi.u.i32 call per loop iteration. The widened path performs one i64 multiply and extracts its low and high halves. Neither path was canonicalized into the other, and the loop-carried state plus final store remain observable."
+  },
+  "generated_amns8_mulhi_v2": {
+    "algorithm_version": 2,
+    "schedule_fingerprint_fnv1a64": "0x4cddfae73658b39f",
+    "full_generated_source_fnv1a64": "0x24bbcb2a2d6829aa",
+    "generated_msl_sha256": "70e8bb4a56da33760c9bcc9f77c23661f795aed421e498ae8bd8955d0b0c3275",
+    "optimized_air_sha256": "987017a20dba51a39cdda3684bf615fba164f0789bea2fdd558d375f3607939a",
+    "compile_flags": "-std=metal3.0 -mmacosx-version-min=13.0 -O3 -fno-fast-math -fmetal-math-mode=safe",
+    "logical_products_per_field": 243,
+    "issued_conceptual_product_slots_per_field": 288,
+    "source_last_use_peak_u32_words": 32,
+    "source_allocation_peak_u32_words": 33,
+    "one_shot_air_variable_i32_multiply_sites": 36,
+    "one_shot_air_mulhi_calls": 28,
+    "one_shot_air_variable_i64_leaf_multiply_sites": 0,
+    "one_shot_air_constant_i64_multiply_by_3_sites": 4,
+    "one_shot_air_simd_shuffle_calls": 494,
+    "one_shot_air_allocas": 0,
+    "one_shot_air_threadgroup_address_space_references": 0,
+    "complete_field_gate_run": false
+  },
+  "correctness": {
+    "constant_rhs": {
+      "direct_product_cases": 16384,
+      "boundary_values": [
+        0,
+        1,
+        2,
+        2147483647,
+        2147483648,
+        4294967294,
+        4294967295
+      ],
+      "boundary_cartesian_cases": 49,
+      "deterministic_random_cases": 16335,
+      "random_generator": "SplitMix64",
+      "random_seed_hex": "0x6a09e667f3bcc909",
+      "oracle": "host UInt64 unsigned multiplication",
+      "direct_product_outputs_passed": true,
+      "dependent_chain_threads": 257,
+      "dependent_chain_iterations": 19,
+      "dependent_chain_cpu_oracle_passed": true,
+      "timed_outputs_equal": true,
+      "timed_output_checksum": 282501263353878
+    },
+    "rotating_two_state": {
+      "random_generator": "SplitMix64",
+      "random_seed_hex": "0x510e527fade682d1",
+      "dependent_chain_threads": 257,
+      "dependent_chain_iterations": 37,
+      "oracle": "host UInt64 unsigned multiplication with left_next=right and right_next=mixed(low,high)",
+      "dependent_chain_cpu_oracle_passed": true,
+      "both_operands_vary_after_seeding": true,
+      "timed_outputs_equal": true,
+      "timed_output_checksum": 562669336358312
+    }
+  },
+  "statistics_method": {
+    "median_even_population": "Sort ascending and average the two center values.",
+    "throughput_median": "Compute products_per_sample * 1e9 / gpu_ns for every sample, then take the even-population median of the rate population.",
+    "p5": "Nearest-rank p5 over ascending rates. With 20 samples this is rank 1, the minimum observed rate.",
+    "paired_ratio": "For every alternating pair compute widened_gpu_ns / mulhi_gpu_ns, then take the even-population median.",
+    "harness_output_note": "The package-owned reporters and this evidence file both use the conventional even-population median described above."
+  },
+  "experiments": {
+    "constant_rhs": {
+      "purpose": "Favorable scalar primitive scout with one loop-carried operand and one compile-time-constant operand.",
+      "limitation": "The second operand is constant. This is not a device throughput ceiling and is not a complete-field schedule.",
+      "threads": 131072,
+      "iterations_per_thread": 65536,
+      "complete_u32x32_to_u64_products_per_sample": 8589934592,
+      "warmup_pairs": 3,
+      "decision_pairs": 20,
+      "order": "alternating; mulhi first on even sample indices",
+      "time_source": "MTLCommandBuffer.gpuStartTime/gpuEndTime",
+      "raw_samples": [
+        { "index": 0, "order": "mulhi,widened", "mulhi_gpu_ns": 29073416, "widened_gpu_ns": 25835999, "mulhi_wall_ns": 29418375, "widened_wall_ns": 26312083 },
+        { "index": 1, "order": "widened,mulhi", "mulhi_gpu_ns": 29054958, "widened_gpu_ns": 24664708, "mulhi_wall_ns": 29439291, "widened_wall_ns": 24978291 },
+        { "index": 2, "order": "mulhi,widened", "mulhi_gpu_ns": 36110249, "widened_gpu_ns": 25354375, "mulhi_wall_ns": 36574500, "widened_wall_ns": 25618541 },
+        { "index": 3, "order": "widened,mulhi", "mulhi_gpu_ns": 28978375, "widened_gpu_ns": 25238375, "mulhi_wall_ns": 29421458, "widened_wall_ns": 25539459 },
+        { "index": 4, "order": "mulhi,widened", "mulhi_gpu_ns": 28965625, "widened_gpu_ns": 25039208, "mulhi_wall_ns": 29238583, "widened_wall_ns": 25337917 },
+        { "index": 5, "order": "widened,mulhi", "mulhi_gpu_ns": 36298374, "widened_gpu_ns": 24901250, "mulhi_wall_ns": 36650042, "widened_wall_ns": 25193459 },
+        { "index": 6, "order": "mulhi,widened", "mulhi_gpu_ns": 38734750, "widened_gpu_ns": 25152500, "mulhi_wall_ns": 39087375, "widened_wall_ns": 25459958 },
+        { "index": 7, "order": "widened,mulhi", "mulhi_gpu_ns": 29457333, "widened_gpu_ns": 24990250, "mulhi_wall_ns": 29815291, "widened_wall_ns": 25294833 },
+        { "index": 8, "order": "mulhi,widened", "mulhi_gpu_ns": 29197625, "widened_gpu_ns": 24910125, "mulhi_wall_ns": 29520042, "widened_wall_ns": 25211167 },
+        { "index": 9, "order": "widened,mulhi", "mulhi_gpu_ns": 29070874, "widened_gpu_ns": 25096666, "mulhi_wall_ns": 29335833, "widened_wall_ns": 25558250 },
+        { "index": 10, "order": "mulhi,widened", "mulhi_gpu_ns": 29373166, "widened_gpu_ns": 24566958, "mulhi_wall_ns": 29675458, "widened_wall_ns": 24900833 },
+        { "index": 11, "order": "widened,mulhi", "mulhi_gpu_ns": 28862916, "widened_gpu_ns": 25554916, "mulhi_wall_ns": 29268833, "widened_wall_ns": 25871792 },
+        { "index": 12, "order": "mulhi,widened", "mulhi_gpu_ns": 30368125, "widened_gpu_ns": 25052999, "mulhi_wall_ns": 30695583, "widened_wall_ns": 25349417 },
+        { "index": 13, "order": "widened,mulhi", "mulhi_gpu_ns": 38681833, "widened_gpu_ns": 24978125, "mulhi_wall_ns": 39047500, "widened_wall_ns": 25257292 },
+        { "index": 14, "order": "mulhi,widened", "mulhi_gpu_ns": 34156291, "widened_gpu_ns": 24420625, "mulhi_wall_ns": 34455417, "widened_wall_ns": 24737250 },
+        { "index": 15, "order": "widened,mulhi", "mulhi_gpu_ns": 29158916, "widened_gpu_ns": 25314625, "mulhi_wall_ns": 29475250, "widened_wall_ns": 25609125 },
+        { "index": 16, "order": "mulhi,widened", "mulhi_gpu_ns": 29446791, "widened_gpu_ns": 25280916, "mulhi_wall_ns": 29750000, "widened_wall_ns": 25603292 },
+        { "index": 17, "order": "widened,mulhi", "mulhi_gpu_ns": 29260041, "widened_gpu_ns": 25300749, "mulhi_wall_ns": 29687708, "widened_wall_ns": 25927500 },
+        { "index": 18, "order": "mulhi,widened", "mulhi_gpu_ns": 29313250, "widened_gpu_ns": 25014374, "mulhi_wall_ns": 29650208, "widened_wall_ns": 25328333 },
+        { "index": 19, "order": "widened,mulhi", "mulhi_gpu_ns": 29523708, "widened_gpu_ns": 25056916, "mulhi_wall_ns": 29838542, "widened_wall_ns": 25405000 }
+      ],
+      "statistics": {
+        "mulhi_median_gpu_ns": 29343208,
+        "mulhi_median_complete_products_per_second": 292740437434.901,
+        "mulhi_rate_from_median_gpu_time": 292740132299.100,
+        "mulhi_p5_complete_products_per_second": 221763005879.733,
+        "mulhi_mean_complete_products_per_second": 278599709046.727,
+        "mulhi_median_wall_ns": 29681583,
+        "widened_median_gpu_ns": 25054957.5,
+        "widened_median_complete_products_per_second": 342843712446.399,
+        "widened_rate_from_median_gpu_time": 342843710351.534,
+        "widened_p5_complete_products_per_second": 332479289537.053,
+        "widened_mean_complete_products_per_second": 342470753211.811,
+        "widened_median_wall_ns": 25377208.5,
+        "paired_widened_time_over_mulhi_time_median": 0.8510271433238811,
+        "paired_widened_time_over_mulhi_time_min": 0.6457327138556231,
+        "paired_widened_time_over_mulhi_time_max": 0.8886468311807598,
+        "interpretation": "Widened time is 14.90% lower at the paired median; equivalently, explicit low-plus-mulhi takes about 17.50% longer."
+      }
+    },
+    "rotating_two_state": {
+      "purpose": "More representative dependency scout with both u32 operands changing every iteration: left_next=right and right_next=mixed(low,high).",
+      "limitation": "This is still a scalar primitive chain, not the AMNS8 shuffle/reduction graph. Long paired samples show substantial system/DVFS variability, so only the absence of a material mulhi advantage is used for prioritization.",
+      "threads": 131072,
+      "iterations_per_thread": 262144,
+      "complete_u32x32_to_u64_products_per_sample": 34359738368,
+      "warmup_pairs": 3,
+      "decision_pairs": 20,
+      "order": "alternating; mulhi first on even sample indices",
+      "time_source": "MTLCommandBuffer.gpuStartTime/gpuEndTime",
+      "raw_samples": [
+        { "index": 0, "order": "mulhi,widened", "mulhi_gpu_ns": 152421041, "widened_gpu_ns": 122969499, "mulhi_wall_ns": 152732292, "widened_wall_ns": 123398000 },
+        { "index": 1, "order": "widened,mulhi", "mulhi_gpu_ns": 158912500, "widened_gpu_ns": 128624999, "mulhi_wall_ns": 159214041, "widened_wall_ns": 129054125 },
+        { "index": 2, "order": "mulhi,widened", "mulhi_gpu_ns": 167052875, "widened_gpu_ns": 194586333, "mulhi_wall_ns": 167360334, "widened_wall_ns": 194907042 },
+        { "index": 3, "order": "widened,mulhi", "mulhi_gpu_ns": 191236041, "widened_gpu_ns": 177836708, "mulhi_wall_ns": 191537625, "widened_wall_ns": 178117500 },
+        { "index": 4, "order": "mulhi,widened", "mulhi_gpu_ns": 199168624, "widened_gpu_ns": 119034875, "mulhi_wall_ns": 199503125, "widened_wall_ns": 119441958 },
+        { "index": 5, "order": "widened,mulhi", "mulhi_gpu_ns": 164653541, "widened_gpu_ns": 149766499, "mulhi_wall_ns": 164956834, "widened_wall_ns": 150068875 },
+        { "index": 6, "order": "mulhi,widened", "mulhi_gpu_ns": 188385958, "widened_gpu_ns": 149464374, "mulhi_wall_ns": 188726209, "widened_wall_ns": 149794666 },
+        { "index": 7, "order": "widened,mulhi", "mulhi_gpu_ns": 133763750, "widened_gpu_ns": 156235250, "mulhi_wall_ns": 134082042, "widened_wall_ns": 156548333 },
+        { "index": 8, "order": "mulhi,widened", "mulhi_gpu_ns": 158837166, "widened_gpu_ns": 129741624, "mulhi_wall_ns": 159192750, "widened_wall_ns": 130079083 },
+        { "index": 9, "order": "widened,mulhi", "mulhi_gpu_ns": 128396749, "widened_gpu_ns": 152055166, "mulhi_wall_ns": 128708000, "widened_wall_ns": 152396833 },
+        { "index": 10, "order": "mulhi,widened", "mulhi_gpu_ns": 185676624, "widened_gpu_ns": 193486125, "mulhi_wall_ns": 185995708, "widened_wall_ns": 193811000 },
+        { "index": 11, "order": "widened,mulhi", "mulhi_gpu_ns": 162651750, "widened_gpu_ns": 151217666, "mulhi_wall_ns": 163010375, "widened_wall_ns": 151537167 },
+        { "index": 12, "order": "mulhi,widened", "mulhi_gpu_ns": 162608083, "widened_gpu_ns": 146329500, "mulhi_wall_ns": 162924166, "widened_wall_ns": 146697291 },
+        { "index": 13, "order": "widened,mulhi", "mulhi_gpu_ns": 156541708, "widened_gpu_ns": 151969250, "mulhi_wall_ns": 156851291, "widened_wall_ns": 152256791 },
+        { "index": 14, "order": "mulhi,widened", "mulhi_gpu_ns": 164059583, "widened_gpu_ns": 179311083, "mulhi_wall_ns": 164430625, "widened_wall_ns": 179646334 },
+        { "index": 15, "order": "widened,mulhi", "mulhi_gpu_ns": 132586874, "widened_gpu_ns": 158173416, "mulhi_wall_ns": 132902208, "widened_wall_ns": 158595458 },
+        { "index": 16, "order": "mulhi,widened", "mulhi_gpu_ns": 138998125, "widened_gpu_ns": 175145083, "mulhi_wall_ns": 139576209, "widened_wall_ns": 175460125 },
+        { "index": 17, "order": "widened,mulhi", "mulhi_gpu_ns": 155833166, "widened_gpu_ns": 153102666, "mulhi_wall_ns": 156136459, "widened_wall_ns": 153425834 },
+        { "index": 18, "order": "mulhi,widened", "mulhi_gpu_ns": 158414833, "widened_gpu_ns": 157070416, "mulhi_wall_ns": 158728416, "widened_wall_ns": 157406417 },
+        { "index": 19, "order": "widened,mulhi", "mulhi_gpu_ns": 178346291, "widened_gpu_ns": 147705750, "mulhi_wall_ns": 178651667, "widened_wall_ns": 148105083 }
+      ],
+      "statistics": {
+        "mulhi_median_gpu_ns": 160760291.5,
+        "mulhi_median_complete_products_per_second": 213760985655.058,
+        "mulhi_rate_from_median_gpu_time": 213732744867.535,
+        "mulhi_p5_complete_products_per_second": 172515819399.345,
+        "mulhi_mean_complete_products_per_second": 215214901437.063,
+        "mulhi_median_wall_ns": 161069103.5,
+        "widened_median_gpu_ns": 152012208,
+        "widened_median_complete_products_per_second": 226032774367.574,
+        "widened_rate_from_median_gpu_time": 226032756316.519,
+        "widened_p5_complete_products_per_second": 176578374432.905,
+        "widened_mean_complete_products_per_second": 226077891921.924,
+        "widened_median_wall_ns": 152326812,
+        "paired_widened_time_over_mulhi_time_median": 0.9503619072025205,
+        "paired_widened_time_over_mulhi_time_min": 0.5976587707911262,
+        "paired_widened_time_over_mulhi_time_max": 1.2600535654707572,
+        "interpretation": "The paired median favors widened multiplication by about 4.96%, with high variability. There is no evidence of a material explicit-mulhi win when both operands rotate."
+      }
+    }
+  },
+  "required_rate_comparison": {
+    "classification": "prioritization evidence, not a strict device roofline",
+    "field_gate_complete_fields_per_second": 2000000000,
+    "direct_topology_issued_widened_product_slots_per_field": 224,
+    "required_widened_products_per_second_before_other_work": 448000000000,
+    "additional_issued_wrapping_product_slots_per_field": 64,
+    "excluded_work": "The 448B comparison excludes the 64 wrapping product slots per field, shuffles, additions, folds, carry correction, quotient work not represented by the primitive chain, loads, stores, and control.",
+    "constant_rhs_widened_median_products_per_second": 342843712446.399,
+    "constant_rhs_widened_fraction_of_required_rate": 0.7652761439,
+    "constant_rhs_explicit_mulhi_median_products_per_second": 292740437434.901,
+    "constant_rhs_explicit_mulhi_fraction_of_required_rate": 0.6534384764,
+    "caveat": "The constant-RHS scout is favorable, dependency-heavy primitive evidence. It is neither a published hardware limit nor proof that every possible schedule must stay below its observed rate.",
+    "existing_direct_amns8_field_median_complete_fields_per_second": 6798372.789,
+    "existing_direct_amns8_field_gate_gap_x": 294.188045,
+    "decision": "The explicit low-plus-mulhi substitution is slower in the favorable constant-RHS scout and shows no material advantage in the rotating-two-state scout. It cannot plausibly rescue the existing approximately 294x full-field miss, so this substitution is pruned. A materially different hierarchical arithmetic schedule remains a separate hypothesis."
+  }
+}

@@ -1,0 +1,108 @@
+[package]
+name = "bls12-381-metal-msm"
+version = "0.1.0"
+edition = "2024"
+resolver = "3"
+rust-version = "1.95"
+authors = ["Midnight Foundation"]
+description = "Standalone BLS12-381 multi-scalar multiplication for Apple Metal"
+license = "Apache-2.0"
+repository = "https://github.com/midnightntwrk/midnight-ledger"
+publish = false
+readme = "README.md"
+build = "build.rs"
+keywords = ["bls12-381", "metal", "msm", "cryptography", "gpu"]
+categories = ["cryptography", "hardware-support"]
+include = [
+    ".github/**",
+    "evidence/**",
+    "examples/**",
+    "build_support/**",
+    "research/**",
+    "shaders/**",
+    "src/**",
+    "tests/**",
+    "build.rs",
+    "Cargo.lock",
+    "Cargo.toml",
+    "ABI.md",
+    "AMNS8_KARATSUBA_CANDIDATE.md",
+    "AMNS8_KARATSUBA_RESULT.md",
+    "AMNS8_MULHI_PRIMITIVE_RESULT.md",
+    "BRANCH_COMPLETED_XYZZ_GATE.md",
+    "BLOCKED128_KARATSUBA_L4_CANDIDATE.md",
+    "BLOCKED128_KARATSUBA_L4_RESULT.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "DESIGN.md",
+    "README.md",
+    "RELEASING.md",
+    "FP32_CARRY_NORMALIZED_GATE.md",
+    "FP32_PACKED_CONVOLUTION_GATE.md",
+    "NAMED_REGISTER_FIOS_GATE.md",
+    "PMNS_KARATSUBA_CANDIDATE.md",
+    "SECURITY.md",
+    "TWO_LANE_U32_COMBA_GATE.md",
+    "U32_LOW_LIMB_PRODUCT_GATE.md",
+    "KARATSUBA_L4_CANDIDATE.md",
+    "KARATSUBA_L4_RESULT.md",
+    "PROVENANCE.md",
+    "NOTICE",
+    "LICENSE-APACHE",
+    "rust-toolchain.toml",
+    "rustfmt.toml",
+]
+
+[lib]
+name = "bls12_381_metal_msm"
+
+[features]
+default = []
+metal = [
+    "dep:blst",
+    "dep:dispatch2",
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-metal",
+]
+metal-diagnostics = ["metal"]
+
+[dependencies]
+zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+blst = { version = "=0.3.16", optional = true }
+dispatch2 = { version = "0.3.1", optional = true, default-features = false, features = [
+    "block2",
+    "std",
+] }
+objc2 = { version = "0.6.4", optional = true }
+objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "NSError",
+    "NSString",
+] }
+objc2-metal = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "MTLBuffer",
+    "MTLBlitCommandEncoder",
+    "MTLAllocation",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLCommandQueue",
+    "MTLComputeCommandEncoder",
+    "MTLComputePass",
+    "MTLComputePipeline",
+    "MTLCounters",
+    "MTLDevice",
+    "MTLLibrary",
+    "MTLResource",
+    "MTLTypes",
+    "dispatch2",
+] }
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dev-dependencies]
+blst = "=0.3.16"
+
+[dev-dependencies]
+num-bigint = { version = "=0.4.6", default-features = false }

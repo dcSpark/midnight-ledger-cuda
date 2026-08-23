@@ -1,0 +1,286 @@
+{
+  "schema": "bls12-381-metal-msm.amns8-k8-field-gate.v1",
+  "status": "no_go",
+  "measurement_scope": "generated_amns8_k8_complete_field_multiply_rotating_operands",
+  "decision_scope": "Reject the direct generated eight-lane AMNS8/K8 topology on this Apple M1 Max. This result does not reject AMNS as a representation, Metal as a platform, materially different hierarchical schedules, or different Apple GPU hardware.",
+  "algorithm": {
+    "name": "generated-amns8-k8-range-managed-coefficient-reduction",
+    "version": 1,
+    "coefficient_count": 8,
+    "coefficient_bits": 64,
+    "threads_per_field": 8,
+    "external_polynomial": "X^8 + 2",
+    "recurrence": "left_next=right; right_next=amns8_multiply(left,right)",
+    "schedule_fingerprint_fnv1a64": "0xf8a2079cfdcc25d5",
+    "logical_u32_products_per_field": 243,
+    "logical_widened_u32_products_per_field": 189,
+    "logical_wrapping_u32_products_per_field": 54,
+    "issued_u32_product_slots_per_field": 288,
+    "issued_widened_u32_product_slots_per_field": 224,
+    "issued_wrapping_u32_product_slots_per_field": 64
+  },
+  "device": {
+    "name": "Apple M1 Max",
+    "registry_id": 4294970105,
+    "gpu_cores": 32,
+    "metal_support": "Metal 4",
+    "thread_execution_width": 32,
+    "selected_threads_per_threadgroup": 32
+  },
+  "environment": {
+    "macos_product_version": "26.5.2",
+    "macos_build_version": "25F84",
+    "rustc": "1.95.0 (59807616e 2026-04-14)",
+    "rustc_commit": "59807616e1fa2540724bfbac14d7976d7e4a3860",
+    "rust_llvm": "22.1.2",
+    "apple_metal_compiler": "32023.883 (metalfe-32023.883)",
+    "metal_target": "air64-apple-darwin25.5.0"
+  },
+  "artifacts": {
+    "generated_msl": {
+      "file": "bls12_381_amns8.metal",
+      "sha256": "ed6cb665fff2d4448b4b8aaf0fb88fdbe5a861ea0057ef34485d241f68e25ce0"
+    },
+    "optimized_air": {
+      "file": "bls12-381-metal-msm.air",
+      "sha256": "16047034ab979c6973cd46579d965a21cd96f0b0a6496d1db1e1f48ea34a0f6d"
+    },
+    "metallib": {
+      "file": "bls12-381-metal-msm.metallib",
+      "sha256": "81e4d51a7125e9337cd5afc97b45ca06a23346b0003480eb54468e88610e01fb"
+    }
+  },
+  "optimized_air_audit": {
+    "kernel": "bls12_381_metal_msm_amns8_field_multiply",
+    "variable_widened_i64_multiply_sites_per_metal_lane": 28,
+    "variable_wrapping_i32_multiply_sites_per_metal_lane": 8,
+    "additional_i64_multiply_by_3_sites": 4,
+    "additional_i32_multiply_by_3_index_sites": 1,
+    "simd_shuffle_calls": 494,
+    "global_input_loads": 2,
+    "constant_loads": 1,
+    "global_stores": 1,
+    "allocas": 0,
+    "private_or_threadgroup_address_space_references": 0,
+    "out_of_line_calls": 0,
+    "physical_register_and_spill_metadata": "not_exposed_by_available_tooling"
+  },
+  "correctness": {
+    "portable_exact_model_passed": true,
+    "metal_differential_corpus_passed": true,
+    "rotating_outputs_checked_after_every_warmup_and_decision_sample": true,
+    "all_checked_outputs_correct": true,
+    "padding_canary_untouched": true,
+    "static_threadgroup_memory_bytes": 0
+  },
+  "source_liveness_gate": {
+    "unit": "u32-equivalent source words per participating lane; ulong counts as two",
+    "maximum_allowed": 56,
+    "typed_last_use_peak": 32,
+    "tokenized_emitted_source_last_use_peak": 32,
+    "typed_allocation_time_peak": 33,
+    "tokenized_allocation_time_peak": 33,
+    "acceptance_peak": 33,
+    "physical_register_count": "unknown_not_exposed_by_available_apple_tooling",
+    "physical_spill_fill_traffic": "unknown_not_measured",
+    "passed": true
+  },
+  "performance": {
+    "logical_fields": 131072,
+    "iterations": 32,
+    "dispatches_per_sample": 4,
+    "complete_field_operations_per_sample": 16777216,
+    "selected_threadgroup_width": 32,
+    "selection_method": "package-owned legal-width scout; scout samples are not part of this frozen decision record",
+    "decision_warmups": 2,
+    "decision_samples": 20,
+    "one_command_and_one_wait_per_sample": true,
+    "timed_allocation": false,
+    "timed_upload": false,
+    "timed_readback": false,
+    "warmup_gpu_samples": [
+      {
+        "index": 0,
+        "gpu_ns": 2460722917,
+        "gpu_complete_fp_per_second": 6818002.906
+      },
+      {
+        "index": 1,
+        "gpu_ns": 2489028458,
+        "gpu_complete_fp_per_second": 6740467.730
+      }
+    ],
+    "decision_raw_samples": [
+      {
+        "index": 0,
+        "gpu_ns": 2481562125,
+        "wall_ns": 2481972083,
+        "gpu_complete_fp_per_second": 6760747.930,
+        "wall_complete_fp_per_second": 6759631.228
+      },
+      {
+        "index": 1,
+        "gpu_ns": 2471621333,
+        "wall_ns": 2472015042,
+        "gpu_complete_fp_per_second": 6787939.470,
+        "wall_complete_fp_per_second": 6786858.379
+      },
+      {
+        "index": 2,
+        "gpu_ns": 2464046667,
+        "wall_ns": 2464376791,
+        "gpu_complete_fp_per_second": 6808806.109,
+        "wall_complete_fp_per_second": 6807894.013
+      },
+      {
+        "index": 3,
+        "gpu_ns": 2494894375,
+        "wall_ns": 2495291750,
+        "gpu_complete_fp_per_second": 6724619.755,
+        "wall_complete_fp_per_second": 6723548.860
+      },
+      {
+        "index": 4,
+        "gpu_ns": 2473758833,
+        "wall_ns": 2474154708,
+        "gpu_complete_fp_per_second": 6782074.217,
+        "wall_complete_fp_per_second": 6780989.057
+      },
+      {
+        "index": 5,
+        "gpu_ns": 2462996875,
+        "wall_ns": 2463443583,
+        "gpu_complete_fp_per_second": 6811708.196,
+        "wall_complete_fp_per_second": 6810472.996
+      },
+      {
+        "index": 6,
+        "gpu_ns": 2476574000,
+        "wall_ns": 2476965541,
+        "gpu_complete_fp_per_second": 6774364.909,
+        "wall_complete_fp_per_second": 6773294.066
+      },
+      {
+        "index": 7,
+        "gpu_ns": 2477553875,
+        "wall_ns": 2477957291,
+        "gpu_complete_fp_per_second": 6771685.641,
+        "wall_complete_fp_per_second": 6770583.198
+      },
+      {
+        "index": 8,
+        "gpu_ns": 2460921250,
+        "wall_ns": 2461300042,
+        "gpu_complete_fp_per_second": 6817453.423,
+        "wall_complete_fp_per_second": 6816404.223
+      },
+      {
+        "index": 9,
+        "gpu_ns": 2476305375,
+        "wall_ns": 2476698041,
+        "gpu_complete_fp_per_second": 6775099.779,
+        "wall_complete_fp_per_second": 6774025.627
+      },
+      {
+        "index": 10,
+        "gpu_ns": 2424666917,
+        "wall_ns": 2425465125,
+        "gpu_complete_fp_per_second": 6919389.992,
+        "wall_complete_fp_per_second": 6917112.857
+      },
+      {
+        "index": 11,
+        "gpu_ns": 2372773875,
+        "wall_ns": 2373851583,
+        "gpu_complete_fp_per_second": 7070718.443,
+        "wall_complete_fp_per_second": 7067508.399
+      },
+      {
+        "index": 12,
+        "gpu_ns": 2461587000,
+        "wall_ns": 2461976875,
+        "gpu_complete_fp_per_second": 6815609.605,
+        "wall_complete_fp_per_second": 6814530.295
+      },
+      {
+        "index": 13,
+        "gpu_ns": 2438836542,
+        "wall_ns": 2439386792,
+        "gpu_complete_fp_per_second": 6879188.380,
+        "wall_complete_fp_per_second": 6877636.648
+      },
+      {
+        "index": 14,
+        "gpu_ns": 2446126500,
+        "wall_ns": 2446517750,
+        "gpu_complete_fp_per_second": 6858686.989,
+        "wall_complete_fp_per_second": 6857590.140
+      },
+      {
+        "index": 15,
+        "gpu_ns": 2463201083,
+        "wall_ns": 2463684125,
+        "gpu_complete_fp_per_second": 6811143.481,
+        "wall_complete_fp_per_second": 6809808.055
+      },
+      {
+        "index": 16,
+        "gpu_ns": 2479407917,
+        "wall_ns": 2479798750,
+        "gpu_complete_fp_per_second": 6766621.936,
+        "wall_complete_fp_per_second": 6765555.471
+      },
+      {
+        "index": 17,
+        "gpu_ns": 2476007125,
+        "wall_ns": 2476394625,
+        "gpu_complete_fp_per_second": 6775915.881,
+        "wall_complete_fp_per_second": 6774855.603
+      },
+      {
+        "index": 18,
+        "gpu_ns": 2495972750,
+        "wall_ns": 2496342375,
+        "gpu_complete_fp_per_second": 6721714.410,
+        "wall_complete_fp_per_second": 6720719.148
+      },
+      {
+        "index": 19,
+        "gpu_ns": 2444081875,
+        "wall_ns": 2444435750,
+        "gpu_complete_fp_per_second": 6864424.703,
+        "wall_complete_fp_per_second": 6863430.957
+      }
+    ],
+    "statistics": {
+      "p5_method": "nearest_rank_over_ascending_rates",
+      "median_gpu_complete_fp_per_second": 6798372.789,
+      "p5_gpu_complete_fp_per_second": 6721714.410,
+      "mean_gpu_complete_fp_per_second": 6814895.663,
+      "minimum_gpu_complete_fp_per_second": 6721714.410,
+      "maximum_gpu_complete_fp_per_second": 7070718.443,
+      "median_wall_complete_fp_per_second": 6797376.196,
+      "p5_wall_complete_fp_per_second": 6720719.148,
+      "mean_wall_complete_fp_per_second": 6813622.461,
+      "minimum_wall_complete_fp_per_second": 6720719.148,
+      "maximum_wall_complete_fp_per_second": 7067508.399
+    },
+    "gates": {
+      "median_gpu_complete_fp_per_second": 2000000000.0,
+      "p5_gpu_complete_fp_per_second": 1800000000.0,
+      "median_fraction_of_gate": 0.003399186394720391,
+      "p5_fraction_of_gate": 0.003734285783190366,
+      "median_gate_miss_factor": 294.18804498429324,
+      "p5_gate_miss_factor": 267.78882443904877,
+      "passed": false
+    }
+  },
+  "simple_lane_repacking_disposition": {
+    "eight_lane_issued_product_slots_per_field": 288,
+    "two_or_four_lane_issued_product_slots_per_field": 252,
+    "maximum_product_wave_gain": 1.1428571428571428,
+    "interpretation": "This is only an optimistic product-slot packing ratio, not an end-to-end speedup forecast. Even granting the full ratio cannot bridge the measured approximately 294x median gate miss, so simple two-lane and four-lane variants are pruned.",
+    "materially_hierarchical_or_different_hardware_retest": "not_ruled_out"
+  },
+  "decision": "NO_GO"
+}
