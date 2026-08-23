@@ -161,6 +161,12 @@ where
 #[allow(unsafe_code)]
 /// Wrapper over the MSM function to use the blstrs underlying function
 pub fn msm_specific<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C::Curve]) -> C::Curve {
+    if TypeId::of::<C>() == TypeId::of::<midnight_curves::G1Affine>() {
+        let n = coeffs.len().min(bases.len());
+        let coeffs = unsafe { &*(&coeffs[..n] as *const [C::Scalar] as *const [Fq]) };
+        midnight_curves::msm_run_diagnostic::record_g1_msm(coeffs);
+    }
+
     #[cfg(feature = "gpu-blitzar")]
     if super::gpu_blitzar::should_accelerate_sppark(coeffs.len())
         && TypeId::of::<C>() == TypeId::of::<midnight_curves::G1Affine>()

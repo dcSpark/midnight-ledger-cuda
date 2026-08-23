@@ -19,8 +19,8 @@ use crate::{
     circuit,
     circuit::Value,
     plonk::{
-        sealed, sealed::SealedPhase, Advice, Any, Any::Fixed, Assignment, Challenge, Circuit,
-        Column, ConstraintSystem, Error, FirstPhase, FloorPlanner, Instance, Phase, Selector,
+        Advice, Any, Any::Fixed, Assignment, Challenge, Circuit, Column, ConstraintSystem, Error,
+        FirstPhase, FloorPlanner, Instance, Phase, Selector, sealed, sealed::SealedPhase,
     },
     utils::rational::Rational,
 };
@@ -97,7 +97,10 @@ impl Lookup {
         let input = "-1,0".parse().unwrap();
         let table = "0".parse().unwrap();
 
-        iter::empty().chain(Some(product)).chain(Some(input)).chain(Some(table))
+        iter::empty()
+            .chain(Some(product))
+            .chain(Some(input))
+            .chain(Some(table))
     }
 }
 
@@ -381,7 +384,9 @@ pub(crate) fn cost_model_options<F: Ord + Field + FromUniformBytes<64>, C: Circu
     .unwrap();
 
     if min_circuit_size == nb_instances {
-        println!("WARNING: The dominant factor in your circuit's size is the number of public inputs, which causes the verifier to perform linear work.");
+        println!(
+            "WARNING: The dominant factor in your circuit's size is the number of public inputs, which causes the verifier to perform linear work."
+        );
     }
 
     CostOptions {
@@ -650,11 +655,11 @@ mod tests {
     use crate::{
         circuit::{Layouter, SimpleFloorPlanner},
         plonk::{
-            create_proof, keygen_pk, keygen_vk_with_k, Constraints, Expression, Fixed, TableColumn,
+            Constraints, Expression, Fixed, TableColumn, create_proof, keygen_pk, keygen_vk_with_k,
         },
         poly::{
-            kzg::{params::ParamsKZG, KZGCommitmentScheme},
             Rotation,
+            kzg::{KZGCommitmentScheme, params::ParamsKZG},
         },
         transcript::{CircuitTranscript, Transcript},
     };
@@ -682,7 +687,9 @@ mod tests {
             let instance = meta.instance_column();
             meta.enable_equality(instance);
 
-            [a, b, c].iter().for_each(|column| meta.enable_equality(*column));
+            [a, b, c]
+                .iter()
+                .for_each(|column| meta.enable_equality(*column));
 
             let table_selector = meta.complex_selector();
             let sl = meta.lookup_table_column();

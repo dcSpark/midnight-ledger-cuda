@@ -380,6 +380,8 @@ where
                 .map(|_| std::sync::OnceLock::new())
                 .collect(),
         ),
+        #[cfg(feature = "gpu-resident")]
+        prepared_resident_key: std::sync::Arc::new(std::sync::OnceLock::new()),
     })
 }
 

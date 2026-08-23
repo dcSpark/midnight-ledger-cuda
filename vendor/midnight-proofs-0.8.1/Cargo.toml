@@ -46,6 +46,7 @@ rustdoc-args = [
 bench-internal = ["criterion"]
 circuit-params = []
 committed-instances = []
+cuda-resident-multiopen-test-support = ["gpu-blitzar"]
 default = ["committed-instances"]
 derive_serde = ["midnight-curves/serde"]
 dev-curves = [
@@ -53,12 +54,29 @@ dev-curves = [
     "midnight-curves/dev-curves",
 ]
 gpu-blitzar = [
+    "gpu-resident",
     "dep:ark-bls12-381",
     "dep:ark-serialize",
     "dep:blitzar",
     "dep:midnight-sppark-msm",
+    "midnight-gpu-prover/cuda",
     "midnight-curves/gpu-sppark",
 ]
+gpu-metal = [
+    "gpu-resident",
+    "midnight-gpu-prover/metal",
+    "midnight-curves/gpu-metal",
+]
+gpu-resident = [
+    "dep:blst",
+    "dep:midnight-gpu-prover",
+]
+gpu-resident-graph-test-support = ["gpu-resident"]
+metal-resident-quotient-test-support = [
+    "gpu-resident",
+    "midnight-gpu-prover/metal",
+]
+metal-resident-quotient-diagnostic = ["gpu-metal"]
 truncated-challenges = []
 
 [lib]
@@ -127,6 +145,10 @@ features = ["gpu"]
 default-features = false
 optional = true
 
+[dependencies.blst]
+version = "0.3.15"
+optional = true
+
 [dependencies.criterion]
 version = "0.7"
 optional = true
@@ -146,6 +168,11 @@ version = "0.3.1"
 [dependencies.midnight-sppark-msm]
 path = "../../midnight-sppark-msm"
 optional = true
+
+[dependencies.midnight-gpu-prover]
+path = "../../midnight-gpu-prover"
+optional = true
+default-features = false
 
 [dependencies.num-bigint]
 version = "0.4"
@@ -175,6 +202,9 @@ optional = true
 
 [dependencies.tracing]
 version = "0.1"
+
+[dependencies.zeroize]
+version = "1.8"
 
 [dev-dependencies.assert_matches]
 version = "1.5"

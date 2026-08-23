@@ -33,6 +33,13 @@ use crate::{
     utils::{arithmetic::eval_polynomial, rational::Rational},
 };
 
+#[cfg(all(
+    feature = "metal-resident-quotient-diagnostic",
+    target_os = "macos",
+    target_arch = "aarch64"
+))]
+use crate::transcript::{CircuitTranscript, TranscriptHash};
+
 #[cfg(feature = "committed-instances")]
 /// Commit to a vector of raw instances. This function can be used to prepare
 /// the committed instances that the verifier will be provided with when this
@@ -295,12 +302,10 @@ where
     let parallel_arguments_mode = std::env::var("MIDNIGHT_GPU_PARALLEL_ARGUMENTS")
         .unwrap_or_else(|_| "auto".to_string())
         .to_ascii_lowercase();
-    let parallel_arguments_min_rows = std::env::var(
-        "MIDNIGHT_GPU_PARALLEL_ARGUMENTS_MIN_ROWS",
-    )
-    .ok()
-    .and_then(|value| value.parse::<usize>().ok())
-    .unwrap_or(1 << 14);
+    let parallel_arguments_min_rows = std::env::var("MIDNIGHT_GPU_PARALLEL_ARGUMENTS_MIN_ROWS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(1 << 14);
     let parallel_arguments = match parallel_arguments_mode.as_str() {
         "1" | "true" | "yes" | "on" | "parallel" => true,
         "auto" => domain.n as usize >= parallel_arguments_min_rows,
@@ -608,9 +613,10 @@ pub(super) fn try_sppark_resident_context<
         return Ok(None);
     }
     let lane = midnight_sppark_msm::current_execution_lane() as usize;
-    let context_slot = pk.sppark_numerator_contexts.get(lane).ok_or_else(|| {
-        Error::Backend(format!("invalid sppark proof execution lane {lane}"))
-    })?;
+    let context_slot = pk
+        .sppark_numerator_contexts
+        .get(lane)
+        .ok_or_else(|| Error::Backend(format!("invalid sppark proof execution lane {lane}")))?;
     let context = context_slot.get_or_init(|| {
         crate::perf_timer::timed("proof_server.prover.plonk.resident.key_context", || {
             super::evaluation::SpparkResidentNumeratorContext::build(
@@ -725,7 +731,42 @@ fn try_resident_quotient_coefficients<
     }))
 }
 
+struct PrecomputedQuotient<F> {
+    h_poly: Vec<F>,
+    x: F,
+}
+
 pub(crate) fn finalise_proof<'a, F, CS: PolynomialCommitmentScheme<F>, T: Transcript>(
+    params: &'a CS::Parameters,
+    pk: &'a ProvingKey<F, CS>,
+    #[cfg(feature = "committed-instances")] nb_committed_instances: usize,
+    trace: ProverTrace<F>,
+    transcript: &mut T,
+    rng: &mut (impl RngCore + CryptoRng),
+) -> Result<(), Error>
+where
+    CS::Commitment: Hashable<T::Hash>,
+    CS::Parameters: Sync,
+    F: WithSmallOrderMulGroup<3>
+        + Sampleable<T::Hash>
+        + Hashable<T::Hash>
+        + Hash
+        + Ord
+        + FromUniformBytes<64>,
+{
+    finalise_proof_inner(
+        params,
+        pk,
+        #[cfg(feature = "committed-instances")]
+        nb_committed_instances,
+        trace,
+        transcript,
+        rng,
+        None,
+    )
+}
+
+fn finalise_proof_inner<'a, F, CS: PolynomialCommitmentScheme<F>, T: Transcript>(
     params: &'a CS::Parameters,
     pk: &'a ProvingKey<F, CS>,
     // The prover needs to get all instances in non-committed form. However,
@@ -735,6 +776,7 @@ pub(crate) fn finalise_proof<'a, F, CS: PolynomialCommitmentScheme<F>, T: Transc
     trace: ProverTrace<F>,
     transcript: &mut T,
     rng: &mut (impl RngCore + CryptoRng),
+    precomputed_quotient: Option<PrecomputedQuotient<F>>,
 ) -> Result<(), Error>
 where
     CS::Commitment: Hashable<T::Hash>,
@@ -752,13 +794,18 @@ where
     let _timer = crate::perf_timer::ScopedTimer::new("proof_server.prover.plonk.finalise_proof");
 
     let domain = pk.get_vk().get_domain();
+    let has_precomputed_quotient = precomputed_quotient.is_some();
 
     #[cfg(feature = "gpu-blitzar")]
-    let resident_quotient = try_resident_quotient_coefficients(pk, &trace)?;
+    let resident_quotient = if has_precomputed_quotient {
+        None
+    } else {
+        try_resident_quotient_coefficients(pk, &trace)?
+    };
     #[cfg(not(feature = "gpu-blitzar"))]
     let resident_quotient: Option<Vec<F>> = None;
 
-    let nu_poly = resident_quotient.is_none().then(|| {
+    let nu_poly = (!has_precomputed_quotient && resident_quotient.is_none()).then(|| {
         crate::perf_timer::timed("proof_server.prover.plonk.compute_nu_poly", || {
             compute_nu_poly(pk, &trace)
         })
@@ -783,38 +830,47 @@ where
         ..
     } = trace;
 
-    // Construct the vanishing argument's h(X) commitments
-    let vanishing =
-        crate::perf_timer::timed("proof_server.prover.plonk.vanishing.construct", || {
-            #[cfg(feature = "gpu-blitzar")]
-            {
-                if let Some(h_poly) = resident_quotient {
-                    vanishing.construct_from_resident_coefficients::<CS, T>(
-                        params, domain, h_poly, transcript, rng,
-                    )
-                } else {
+    let (vanishing, x) = if let Some(precomputed) = precomputed_quotient {
+        let vanishing = crate::perf_timer::timed(
+            "proof_server.prover.plonk.vanishing.construct.precommitted_metal",
+            || vanishing.construct_from_precommitted_h_poly(domain, precomputed.h_poly),
+        )?;
+        (vanishing, precomputed.x)
+    } else {
+        // Construct the vanishing argument's h(X) commitments.
+        let vanishing =
+            crate::perf_timer::timed("proof_server.prover.plonk.vanishing.construct", || {
+                #[cfg(feature = "gpu-blitzar")]
+                {
+                    if let Some(h_poly) = resident_quotient {
+                        vanishing.construct_from_resident_coefficients::<CS, T>(
+                            params, domain, h_poly, transcript, rng,
+                        )
+                    } else {
+                        vanishing.construct::<CS, T>(
+                            params,
+                            domain,
+                            nu_poly
+                                .expect("host numerator exists when resident quotient is absent"),
+                            transcript,
+                            rng,
+                        )
+                    }
+                }
+                #[cfg(not(feature = "gpu-blitzar"))]
+                {
                     vanishing.construct::<CS, T>(
                         params,
                         domain,
-                        nu_poly.expect("host numerator exists when resident quotient is absent"),
+                        nu_poly.expect("host numerator exists without CUDA"),
                         transcript,
                         rng,
                     )
                 }
-            }
-            #[cfg(not(feature = "gpu-blitzar"))]
-            {
-                vanishing.construct::<CS, T>(
-                    params,
-                    domain,
-                    nu_poly.expect("host numerator exists without CUDA"),
-                    transcript,
-                    rng,
-                )
-            }
-        })?;
-
-    let x: F = transcript.squeeze_challenge();
+            })?;
+        let x: F = transcript.squeeze_challenge();
+        (vanishing, x)
+    };
 
     crate::perf_timer::timed("proof_server.prover.plonk.write_evals", || {
         #[cfg(feature = "gpu-blitzar")]
@@ -984,17 +1040,13 @@ where
         + Ord
         + FromUniformBytes<64>,
 {
+    let _msm_run_diagnostic = midnight_curves::msm_run_diagnostic::begin_scope();
     #[cfg(feature = "gpu-blitzar")]
-    let _sppark_execution = if midnight_curves::gpu_sppark::enabled() {
-        let msm_config = midnight_sppark_msm::Bls12_381MsmConfig::for_k(
-            pk.vk.domain.n.ilog2(),
-        )
-        .with_diagnostic_overrides()
-        .map_err(|error| Error::Backend(error.to_string()))?;
+    let _resident_execution = if midnight_curves::gpu_sppark::enabled() {
         Some(
-            midnight_sppark_msm::SpparkExecutionGuard::acquire_with_affinity_and_config(
+            midnight_gpu_prover::ExecutionGuard::acquire(
                 pk as *const ProvingKey<F, CS> as usize,
-                msm_config,
+                pk.vk.domain.n.ilog2(),
             )
             .map_err(|error| Error::Backend(error.to_string()))?,
         )
@@ -1021,6 +1073,112 @@ where
         transcript,
         &mut rng,
     )
+}
+
+/// Creates a proof with the resident Metal quotient prefix when Metal is the
+/// selected execution route.
+///
+/// The historical feature and function names are retained for compatibility.
+/// Substitution is now the default Metal behavior; an explicit environment
+/// override may retain the canonical CPU quotient for diagnostic comparisons.
+#[cfg(all(
+    feature = "metal-resident-quotient-diagnostic",
+    target_os = "macos",
+    target_arch = "aarch64"
+))]
+pub fn create_proof_with_metal_quotient_diagnostic<H, ConcreteCircuit>(
+    params: &crate::poly::kzg::params::ParamsKZG<midnight_curves::Bls12>,
+    pk: &ProvingKey<
+        midnight_curves::Fq,
+        crate::poly::kzg::KZGCommitmentScheme<midnight_curves::Bls12>,
+    >,
+    circuits: &[ConcreteCircuit],
+    #[cfg(feature = "committed-instances")] nb_committed_instances: usize,
+    instances: &[&[&[midnight_curves::Fq]]],
+    transcript: &mut CircuitTranscript<H>,
+    mut rng: impl RngCore + CryptoRng,
+) -> Result<(), Error>
+where
+    H: TranscriptHash,
+    ConcreteCircuit: Circuit<midnight_curves::Fq>,
+    midnight_curves::Fq: Sampleable<H> + Hashable<H>,
+    midnight_curves::G1Projective: Hashable<H>,
+{
+    let _msm_run_diagnostic = midnight_curves::msm_run_diagnostic::begin_scope();
+    let _timer = crate::perf_timer::ScopedTimer::new("proof_server.prover.plonk.create_proof");
+    let trace = compute_trace(
+        params,
+        pk,
+        circuits,
+        #[cfg(feature = "committed-instances")]
+        nb_committed_instances,
+        instances,
+        transcript,
+        &mut rng,
+    )?;
+
+    if midnight_curves::gpu_metal::enabled() && metal_quotient_substitution_enabled()? {
+        let prefix = super::resident_quotient_test_support::run_shared_resident_quotient_prefix(
+            params, pk, &trace, transcript, &mut rng,
+        )?;
+        return finalise_proof_inner(
+            params,
+            pk,
+            #[cfg(feature = "committed-instances")]
+            nb_committed_instances,
+            trace,
+            transcript,
+            &mut rng,
+            Some(PrecomputedQuotient {
+                h_poly: prefix.h_poly,
+                x: prefix.x,
+            }),
+        );
+    }
+
+    if midnight_curves::gpu_metal::enabled()
+        && matches!(
+            std::env::var("MIDNIGHT_METAL_QUOTIENT_DIAGNOSTIC").as_deref(),
+            Ok("1")
+        )
+    {
+        crate::perf_timer::timed("proof_server.prover.plonk.metal_quotient_shadow", || {
+            super::resident_quotient_test_support::run_shared_diagnostic_resident_quotient_shadow(
+                params, pk, &trace, transcript,
+            )
+        })?;
+    }
+
+    finalise_proof(
+        params,
+        pk,
+        #[cfg(feature = "committed-instances")]
+        nb_committed_instances,
+        trace,
+        transcript,
+        &mut rng,
+    )
+}
+
+#[cfg(all(
+    feature = "metal-resident-quotient-diagnostic",
+    target_os = "macos",
+    target_arch = "aarch64"
+))]
+fn metal_quotient_substitution_enabled() -> Result<bool, Error> {
+    match std::env::var("MIDNIGHT_METAL_QUOTIENT_SUBSTITUTE") {
+        Err(std::env::VarError::NotPresent) => Ok(true),
+        Ok(value) => match value.to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" | "metal" | "auto" => Ok(true),
+            "0" | "false" | "no" | "off" | "cpu" => Ok(false),
+            _ => Err(Error::Backend(format!(
+                "MIDNIGHT_METAL_QUOTIENT_SUBSTITUTE must be on, off, metal, or cpu, got {value:?}"
+            ))),
+        },
+        Err(std::env::VarError::NotUnicode(_)) => Err(Error::Backend(
+            "MIDNIGHT_METAL_QUOTIENT_SUBSTITUTE must be valid Unicode".to_owned(),
+        )),
+    }
 }
 
 #[cfg_attr(feature = "gpu-blitzar", allow(unsafe_code))]
@@ -1128,16 +1286,14 @@ where
                 .collect::<Result<Vec<_>, _>>()?;
 
             #[cfg(feature = "gpu-blitzar")]
-            let keep_resident_instance_host_mirror = std::env::var(
-                "MIDNIGHT_GPU_RESIDENT_INSTANCE_HOST_MIRROR",
-            )
-            .is_ok_and(|value| {
-                matches!(
-                    value.to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes" | "on" | "debug" | "validate" | "check"
-                )
-            }) || std::env::var("MIDNIGHT_GPU_RESIDENT_ARGUMENTS")
-                .is_ok_and(|value| value.to_ascii_lowercase().starts_with("debug"));
+            let keep_resident_instance_host_mirror =
+                std::env::var("MIDNIGHT_GPU_RESIDENT_INSTANCE_HOST_MIRROR").is_ok_and(|value| {
+                    matches!(
+                        value.to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on" | "debug" | "validate" | "check"
+                    )
+                }) || std::env::var("MIDNIGHT_GPU_RESIDENT_ARGUMENTS")
+                    .is_ok_and(|value| value.to_ascii_lowercase().starts_with("debug"));
             #[cfg(feature = "gpu-blitzar")]
             let defer_resident_coefficients = resident_finalise_supported(pk)
                 && !instance_values.is_empty()

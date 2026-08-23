@@ -11,14 +11,14 @@ use midnight_proofs::{
     circuit::{Cell, Layouter, SimpleFloorPlanner, Value},
     dev::MockProver,
     plonk::{
-        create_proof as create_plonk_proof, keygen_pk, keygen_vk, keygen_vk_with_k,
-        prepare as prepare_plonk_proof, Advice, Circuit, Column, ConstraintSystem, Constraints,
-        Error, Fixed, ProvingKey, TableColumn, VerifyingKey,
+        Advice, Circuit, Column, ConstraintSystem, Constraints, Error, Fixed, ProvingKey,
+        TableColumn, VerifyingKey, create_proof as create_plonk_proof, keygen_pk, keygen_vk,
+        keygen_vk_with_k, prepare as prepare_plonk_proof,
     },
     poly::{
-        commitment::{Guard, PolynomialCommitmentScheme},
-        kzg::{params::ParamsKZG, KZGCommitmentScheme},
         Rotation,
+        commitment::{Guard, PolynomialCommitmentScheme},
+        kzg::{KZGCommitmentScheme, params::ParamsKZG},
     },
     transcript::{CircuitTranscript, Hashable, Sampleable, Transcript},
     utils::{arithmetic::Field, rational::Rational},
@@ -384,7 +384,9 @@ fn plonk_api() {
                 })?;
                 let (a1, b1, _) = cs.raw_add(&mut layouter, || {
                     let fin = a_squared + a;
-                    a.zip(a_squared).zip(fin).map(|((a, a_squared), fin)| (a, a_squared, fin))
+                    a.zip(a_squared)
+                        .zip(fin)
+                        .map(|((a, a_squared), fin)| (a, a_squared, fin))
                 })?;
                 cs.copy(&mut layouter, a0, a1)?;
                 cs.copy(&mut layouter, b1, c0)?;

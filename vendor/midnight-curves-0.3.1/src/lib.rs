@@ -22,6 +22,8 @@ pub mod fft;
 #[cfg(any(test, feature = "dev-curves"))]
 pub mod hash_to_curve;
 pub mod msm;
+#[doc(hidden)]
+pub mod msm_run_diagnostic;
 mod perf_timer;
 pub mod serde;
 pub mod serde_traits;
@@ -125,23 +127,25 @@ pub mod gpu_sppark {
     pub fn try_bls12_381_fr_shifted_prefix_product<F: Field + 'static>(
         values: &mut [F],
         initial: F,
-    ) -> bool {
+    ) -> Result<bool, midnight_sppark_msm::MsmError> {
         if !prefix_ops_enabled(values.len()) || TypeId::of::<F>() != TypeId::of::<crate::Fq>() {
-            return false;
+            return Ok(false);
         }
 
         let initial = raw_from_scalar(initial);
         let values = raw_values(values);
-        midnight_sppark_msm::bls12_381_fr_shifted_prefix_product(values, initial).is_ok()
+        midnight_sppark_msm::bls12_381_fr_shifted_prefix_product(values, initial).map(|()| true)
     }
 
-    pub fn try_bls12_381_fr_invert_assign<F: Field + 'static>(values: &mut [F]) -> bool {
+    pub fn try_bls12_381_fr_invert_assign<F: Field + 'static>(
+        values: &mut [F],
+    ) -> Result<bool, midnight_sppark_msm::MsmError> {
         if !invert_ops_enabled(values.len()) || TypeId::of::<F>() != TypeId::of::<crate::Fq>() {
-            return false;
+            return Ok(false);
         }
 
         let values = raw_values(values);
-        midnight_sppark_msm::bls12_381_fr_invert_assign(values).is_ok()
+        midnight_sppark_msm::bls12_381_fr_invert_assign(values).map(|()| true)
     }
 
     pub fn try_bls12_381_fr_sort_canonical<F: Field + 'static>(values: &mut [F]) -> bool {
@@ -193,7 +197,7 @@ pub mod gpu_sppark {
             .collect::<Vec<_>>();
         let mut flat_output = vec![F::ZERO; output_len * inputs.len()];
         let raw_output = raw_values(&mut flat_output);
-        midnight_sppark_msm::bls12_381_fr_coeff_to_extended_batch(
+        if midnight_sppark_msm::bls12_381_fr_coeff_to_extended_batch(
             raw_output,
             &flat_inputs,
             input_len,
@@ -202,7 +206,11 @@ pub mod gpu_sppark {
             raw_from_scalar(first),
             raw_from_scalar(second),
         )
-        .ok()?;
+        .is_err()
+        {
+            midnight_sppark_msm::record_accelerator_fallback();
+            return None;
+        }
 
         Some(
             flat_output
@@ -490,10 +498,10 @@ pub mod gpu_sppark {
                 expected.push(expected[idx - 1] * values[idx - 1]);
             }
 
-            assert!(try_bls12_381_fr_shifted_prefix_product(
-                &mut values,
-                initial
-            ));
+            assert!(
+                try_bls12_381_fr_shifted_prefix_product(&mut values, initial)
+                    .expect("native prefix product should succeed")
+            );
             assert_eq!(values, expected);
 
             if let Some(old_min) = old_min {
@@ -508,6 +516,222 @@ pub mod gpu_sppark {
             }
             set_enabled(old_enabled);
         }
+    }
+}
+
+#[cfg(feature = "gpu-metal")]
+pub mod gpu_metal {
+    //! Explicit host-round-trip Metal transforms for the hybrid proof route.
+
+    use std::{
+        any::TypeId,
+        mem::{ManuallyDrop, align_of, size_of},
+        sync::atomic::{AtomicBool, Ordering},
+    };
+
+    use ff::Field;
+
+    static ENABLED: AtomicBool = AtomicBool::new(false);
+
+    /// Restores the previous Metal-transform selection when dropped.
+    pub struct EnableGuard {
+        previous: bool,
+    }
+
+    impl EnableGuard {
+        /// Selects or deselects Metal transforms for this process.
+        pub fn set(enabled: bool) -> Self {
+            Self {
+                previous: ENABLED.swap(enabled, Ordering::SeqCst),
+            }
+        }
+    }
+
+    impl Drop for EnableGuard {
+        fn drop(&mut self) {
+            ENABLED.store(self.previous, Ordering::SeqCst);
+        }
+    }
+
+    /// Whether the explicit hybrid proof guard selected Metal transforms.
+    pub fn enabled() -> bool {
+        ENABLED.load(Ordering::Relaxed)
+    }
+
+    /// Batches same-domain coefficient polynomials into one Metal coset NTT.
+    ///
+    /// `None` means the generic field or small shape should remain on CPU.
+    /// Once an eligible BLS12-381 call is selected, Metal errors are fatal and
+    /// never turn into a silent CPU retry.
+    pub fn try_bls12_381_fr_coeff_to_extended_batch<F: Field + 'static>(
+        inputs: &[&[F]],
+        extended_len: usize,
+        extended_log_size: u32,
+    ) -> Option<Vec<Vec<F>>> {
+        if !enabled()
+            || TypeId::of::<F>() != TypeId::of::<crate::Fq>()
+            || inputs.is_empty()
+            || extended_log_size < minimum_log_size()
+            || inputs.len() < minimum_batch_count()
+        {
+            return None;
+        }
+
+        let coefficients_per_batch = inputs[0].len();
+        assert!(
+            coefficients_per_batch != 0
+                && coefficients_per_batch.is_power_of_two()
+                && coefficients_per_batch <= extended_len
+                && inputs
+                    .iter()
+                    .all(|input| input.len() == coefficients_per_batch),
+            "Metal coefficient batches must have one nonempty power-of-two shape"
+        );
+        assert_eq!(extended_len, 1usize << extended_log_size);
+        assert_eq!(
+            size_of::<F>(),
+            size_of::<midnight_gpu_prover::metal::Bls12_381Fr>()
+        );
+        assert_eq!(
+            align_of::<F>(),
+            align_of::<midnight_gpu_prover::metal::Bls12_381Fr>()
+        );
+
+        let mut packed = Vec::with_capacity(coefficients_per_batch * inputs.len());
+        for input in inputs {
+            // SAFETY: the TypeId, size, and alignment checks above prove that
+            // `F` is the transparent BLS12-381 Fr wrapper used by the raw Metal
+            // ABI. Both types are Copy and contain exactly four `u64` limbs.
+            let raw = unsafe {
+                std::slice::from_raw_parts(
+                    input
+                        .as_ptr()
+                        .cast::<midnight_gpu_prover::metal::Bls12_381Fr>(),
+                    input.len(),
+                )
+            };
+            packed.extend_from_slice(raw);
+        }
+
+        let raw_output = midnight_gpu_prover::metal::bls12_381_coeff_to_extended_metal(
+            &packed,
+            coefficients_per_batch,
+            extended_log_size,
+        )
+        .unwrap_or_else(|error| panic!("selected Metal coefficient transform failed: {}", error));
+        assert_eq!(raw_output.len(), extended_len * inputs.len());
+
+        let mut output = ManuallyDrop::new(raw_output);
+        // SAFETY: the same exact-layout checks used for input apply in reverse;
+        // ownership transfers once from the raw vector into the F vector.
+        let output = unsafe {
+            Vec::from_raw_parts(
+                output.as_mut_ptr().cast::<F>(),
+                output.len(),
+                output.capacity(),
+            )
+        };
+        Some(
+            output
+                .chunks_exact(extended_len)
+                .map(<[F]>::to_vec)
+                .collect(),
+        )
+    }
+
+    /// Batches same-domain Lagrange polynomials into one fail-closed Metal iNTT.
+    ///
+    /// `None` means the shape remains on the normal CPU path before Metal is
+    /// selected. An error after selection aborts instead of retrying on CPU.
+    pub fn try_bls12_381_fr_lagrange_to_coeff_batch<F: Field + 'static>(
+        inputs: &[&[F]],
+        log_size: u32,
+    ) -> Option<Vec<Vec<F>>> {
+        if !enabled()
+            || TypeId::of::<F>() != TypeId::of::<crate::Fq>()
+            || inputs.is_empty()
+            || log_size < minimum_lagrange_log_size()
+            || inputs.len() < minimum_lagrange_batch_count()
+        {
+            return None;
+        }
+
+        let domain_len = 1usize.checked_shl(log_size).unwrap_or(0);
+        assert!(
+            domain_len != 0 && inputs.iter().all(|input| input.len() == domain_len),
+            "Metal Lagrange batches must match one nonempty power-of-two domain"
+        );
+        assert_eq!(
+            size_of::<F>(),
+            size_of::<midnight_gpu_prover::metal::Bls12_381Fr>()
+        );
+        assert_eq!(
+            align_of::<F>(),
+            align_of::<midnight_gpu_prover::metal::Bls12_381Fr>()
+        );
+
+        let mut packed = Vec::with_capacity(domain_len * inputs.len());
+        for input in inputs {
+            // SAFETY: the TypeId, size, and alignment checks bind `F` to this
+            // repository's transparent BLS12-381 Fr Montgomery wrapper.
+            let raw = unsafe {
+                std::slice::from_raw_parts(
+                    input
+                        .as_ptr()
+                        .cast::<midnight_gpu_prover::metal::Bls12_381Fr>(),
+                    input.len(),
+                )
+            };
+            packed.extend_from_slice(raw);
+        }
+
+        let raw_output = midnight_gpu_prover::metal::bls12_381_ntt_metal(
+            &packed,
+            log_size,
+            midnight_gpu_prover::metal::NttDirection::Inverse,
+        )
+        .unwrap_or_else(|error| panic!("selected Metal inverse NTT failed: {}", error));
+        assert_eq!(raw_output.len(), domain_len * inputs.len());
+
+        let mut output = ManuallyDrop::new(raw_output);
+        // SAFETY: exact-layout checks above apply in reverse and ownership is
+        // transferred exactly once from the raw vector into the field vector.
+        let output = unsafe {
+            Vec::from_raw_parts(
+                output.as_mut_ptr().cast::<F>(),
+                output.len(),
+                output.capacity(),
+            )
+        };
+        Some(output.chunks_exact(domain_len).map(<[F]>::to_vec).collect())
+    }
+
+    fn minimum_log_size() -> u32 {
+        std::env::var("MIDNIGHT_METAL_NTT_MIN_LOG_SIZE")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(16)
+    }
+
+    fn minimum_batch_count() -> usize {
+        std::env::var("MIDNIGHT_METAL_NTT_MIN_BATCHES")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(4)
+    }
+
+    fn minimum_lagrange_log_size() -> u32 {
+        std::env::var("MIDNIGHT_METAL_NTT_LAGRANGE_MIN_LOG_SIZE")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(13)
+    }
+
+    fn minimum_lagrange_batch_count() -> usize {
+        std::env::var("MIDNIGHT_METAL_NTT_LAGRANGE_MIN_BATCHES")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(4)
     }
 }
 

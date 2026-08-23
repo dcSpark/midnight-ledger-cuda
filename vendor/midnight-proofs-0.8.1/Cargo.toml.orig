@@ -41,6 +41,13 @@ serde = { workspace = true }
 serde_derive = { workspace = true }
 rayon = { workspace = true }
 criterion = { version = "0.7", optional = true }
+midnight-gpu-prover = { path = "../../midnight-gpu-prover", optional = true, default-features = false }
+midnight-sppark-msm = { path = "../../midnight-sppark-msm", optional = true }
+ark-bls12-381 = { version = "0.5.0", optional = true }
+ark-serialize = { version = "0.5.0", optional = true }
+blitzar = { version = "5.0.1", features = ["gpu"], default-features = false, optional = true }
+blst = { version = "0.3.15", optional = true }
+zeroize = "1.8"
 
 # Developer tooling dependencies
 tabbycat = { version = "0.1", features = ["attributes"], optional = true }
@@ -69,6 +76,28 @@ default = ["committed-instances"]
 circuit-params = []
 derive_serde = ["midnight-curves/serde"]
 dev-curves = ["midnight-curves/serde", "midnight-curves/dev-curves"]
+cuda-resident-multiopen-test-support = ["gpu-blitzar"]
+gpu-blitzar = [
+  "gpu-resident",
+  "dep:ark-bls12-381",
+  "dep:ark-serialize",
+  "dep:blitzar",
+  "dep:midnight-sppark-msm",
+  "midnight-gpu-prover/cuda",
+  "midnight-curves/gpu-sppark",
+]
+gpu-metal = [
+  "gpu-resident",
+  "midnight-gpu-prover/metal",
+  "midnight-curves/gpu-metal",
+]
+gpu-resident = ["dep:blst", "dep:midnight-gpu-prover"]
+gpu-resident-graph-test-support = ["gpu-resident"]
+metal-resident-quotient-test-support = [
+  "gpu-resident",
+  "midnight-gpu-prover/metal",
+]
+metal-resident-quotient-diagnostic = ["gpu-metal"]
 
 # This feature truncates challenges to half the size of the scalar field.
 truncated-challenges = []

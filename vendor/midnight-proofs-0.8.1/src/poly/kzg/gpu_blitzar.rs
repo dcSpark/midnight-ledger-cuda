@@ -304,6 +304,7 @@ where
         .map(|words| Sequence::from(words.as_slice()))
         .collect::<Vec<_>>();
     let mut out = vec![[0u8; 48]; scalar_slices.len()];
+    midnight_sppark_msm::record_external_accelerator_compute_call();
     compute_bls12_381_g1_commitments_with_generators(
         &mut out,
         &sequences,

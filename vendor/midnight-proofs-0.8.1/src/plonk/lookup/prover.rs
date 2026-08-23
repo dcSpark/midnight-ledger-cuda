@@ -1118,16 +1118,18 @@ impl<F: WithSmallOrderMulGroup<3>> Permuted<F> {
         crate::perf_timer::timed_count(
             "proof_server.prover.plonk.lookup.product_batch_invert",
             lookup_product.len(),
-            || {
+            || -> Result<(), Error> {
                 #[cfg(feature = "gpu-blitzar")]
                 if midnight_curves::gpu_sppark::try_bls12_381_fr_invert_assign(&mut lookup_product)
+                    .map_err(|error| Error::Backend(error.to_string()))?
                 {
-                    return;
+                    return Ok(());
                 }
 
                 lookup_product.iter_mut().batch_invert();
+                Ok(())
             },
-        );
+        )?;
 
         // Finish the computation of the entire fraction by computing the numerators
         // (\theta^{m-1} a_0(\omega^i) + \theta^{m-2} a_1(\omega^i) + ... + \theta

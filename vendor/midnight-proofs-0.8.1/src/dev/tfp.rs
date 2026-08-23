@@ -5,8 +5,8 @@ use tracing::{debug, debug_span, span::EnteredSpan};
 
 use crate::{
     circuit::{
-        layouter::{RegionLayouter, SyncDeps},
         AssignedCell, Cell, Layouter, Region, Table, Value,
+        layouter::{RegionLayouter, SyncDeps},
     },
     plonk::{
         Advice, Any, Assignment, Challenge, Circuit, Column, ConstraintSystem, Error, Fixed,
@@ -150,7 +150,8 @@ impl<F: Field, C: Circuit<F>> Circuit<F> for TracingCircuit<'_, F, C> {
 
     fn synthesize(&self, config: Self::Config, layouter: impl Layouter<F>) -> Result<(), Error> {
         let _span = debug_span!("synthesize").entered();
-        self.inner_ref().synthesize(config, TracingLayouter::new(layouter))
+        self.inner_ref()
+            .synthesize(config, TracingLayouter::new(layouter))
     }
 }
 

@@ -7,7 +7,7 @@ use group::GroupEncoding;
 use midnight_curves::bn256::{Fr, G1};
 
 use crate::transcript::{
-    Hashable, Sampleable, TranscriptHash, BLAKE2B_PREFIX_CHALLENGE, BLAKE2B_PREFIX_COMMON,
+    BLAKE2B_PREFIX_CHALLENGE, BLAKE2B_PREFIX_COMMON, Hashable, Sampleable, TranscriptHash,
 };
 
 impl TranscriptHash for Blake2bState {
@@ -15,7 +15,10 @@ impl TranscriptHash for Blake2bState {
     type Output = Vec<u8>;
 
     fn init() -> Self {
-        Params::new().hash_length(64).key(b"Domain separator for transcript").to_state()
+        Params::new()
+            .hash_length(64)
+            .key(b"Domain separator for transcript")
+            .to_state()
     }
 
     fn absorb(&mut self, input: &Self::Input) {

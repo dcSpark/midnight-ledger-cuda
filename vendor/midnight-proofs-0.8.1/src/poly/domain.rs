@@ -31,6 +31,23 @@ pub struct EvaluationDomain<F: Field> {
     barycentric_weight: F,
 }
 
+/// Exact private domain values needed to prepare a backend-neutral resident key.
+#[cfg(feature = "gpu-resident")]
+pub(crate) struct ResidentDomainValues<'a, F: Field> {
+    pub(crate) k: u32,
+    pub(crate) extended_k: u32,
+    pub(crate) omega: F,
+    pub(crate) omega_inv: F,
+    pub(crate) extended_omega: F,
+    pub(crate) extended_omega_inv: F,
+    pub(crate) ifft_divisor: F,
+    pub(crate) extended_ifft_divisor: F,
+    pub(crate) g_coset: F,
+    pub(crate) g_coset_inv: F,
+    pub(crate) barycentric_weight: F,
+    pub(crate) t_evaluations: &'a [F],
+}
+
 impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
     /// This constructs a new evaluation domain object based on the provided
     /// values $j, k$.
@@ -141,6 +158,25 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         }
     }
 
+    /// Borrows the exact domain constants used by resident key preparation.
+    #[cfg(feature = "gpu-resident")]
+    pub(crate) fn resident_values(&self) -> ResidentDomainValues<'_, F> {
+        ResidentDomainValues {
+            k: self.k,
+            extended_k: self.extended_k,
+            omega: self.omega,
+            omega_inv: self.omega_inv,
+            extended_omega: self.extended_omega,
+            extended_omega_inv: self.extended_omega_inv,
+            ifft_divisor: self.ifft_divisor,
+            extended_ifft_divisor: self.extended_ifft_divisor,
+            g_coset: self.g_coset,
+            g_coset_inv: self.g_coset_inv,
+            barycentric_weight: self.barycentric_weight,
+            t_evaluations: &self.t_evaluations,
+        }
+    }
+
     /// Obtains a polynomial in Lagrange form when given a vector of Lagrange
     /// coefficients of size `n`; panics if the provided vector is the wrong
     /// length.
@@ -233,6 +269,44 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         }
     }
 
+    /// Converts one same-domain Lagrange batch to coefficient form.
+    ///
+    /// Metal-enabled builds submit eligible BLS12-381 batches as one inverse
+    /// transform; all other fields and shapes retain the established CPU path.
+    pub fn lagranges_to_coeff(
+        &self,
+        polynomials: Vec<Polynomial<F, LagrangeCoeff>>,
+    ) -> Vec<Polynomial<F, Coeff>>
+    where
+        F: 'static,
+    {
+        #[cfg(feature = "gpu-metal")]
+        {
+            let inputs = polynomials
+                .iter()
+                .map(|polynomial| polynomial.values.as_slice())
+                .collect::<Vec<_>>();
+            if let Some(values) =
+                midnight_curves::gpu_metal::try_bls12_381_fr_lagrange_to_coeff_batch(
+                    &inputs, self.k,
+                )
+            {
+                return values
+                    .into_iter()
+                    .map(|values| Polynomial {
+                        values,
+                        _marker: PhantomData,
+                    })
+                    .collect();
+            }
+        }
+
+        polynomials
+            .into_iter()
+            .map(|polynomial| self.lagrange_to_coeff(polynomial))
+            .collect()
+    }
+
     /// This takes us from an n-length coefficient vector into the
     /// lagrange evaluation domain.
     pub fn coeff_to_lagrange(&self, mut a: Polynomial<F, Coeff>) -> Polynomial<F, LagrangeCoeff> {
@@ -286,6 +360,29 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
                     self.extended_k,
                     self.g_coset,
                     self.g_coset_inv,
+                )
+            {
+                return values
+                    .into_iter()
+                    .map(|values| Polynomial {
+                        values,
+                        _marker: PhantomData,
+                    })
+                    .collect();
+            }
+        }
+
+        #[cfg(feature = "gpu-metal")]
+        {
+            let inputs = polynomials
+                .iter()
+                .map(|polynomial| polynomial.values.as_slice())
+                .collect::<Vec<_>>();
+            if let Some(values) =
+                midnight_curves::gpu_metal::try_bls12_381_fr_coeff_to_extended_batch(
+                    &inputs,
+                    self.extended_len(),
+                    self.extended_k,
                 )
             {
                 return values

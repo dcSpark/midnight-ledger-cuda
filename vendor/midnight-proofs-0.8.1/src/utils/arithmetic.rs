@@ -8,12 +8,12 @@ use std::{
 
 pub use ff::Field;
 use group::{
+    GroupOpsOwned, ScalarMulOwned,
     ff::{BatchInvert, PrimeField},
     prime::{PrimeCurve, PrimeCurveAffine},
-    GroupOpsOwned, ScalarMulOwned,
 };
-use midnight_curves::{fft::best_fft, pairing::MultiMillerLoop};
 pub use midnight_curves::{CurveAffine, CurveExt};
+use midnight_curves::{fft::best_fft, pairing::MultiMillerLoop};
 
 /// This represents an element of a group with basic operations that can be
 /// performed. This allows an FFT implementation (for example) to operate
@@ -52,7 +52,9 @@ pub fn g_to_lagrange<C: PrimeCurve>(g_projective: &[C], k: u32) -> Vec<C> {
 /// This evaluates a provided polynomial (in coefficient form) at `point`.
 pub fn eval_polynomial<F: Field>(poly: &[F], point: F) -> F {
     fn evaluate<F: Field>(poly: &[F], point: F) -> F {
-        poly.iter().rev().fold(F::ZERO, |acc, coeff| acc * point + coeff)
+        poly.iter()
+            .rev()
+            .fold(F::ZERO, |acc, coeff| acc * point + coeff)
     }
     let n = poly.len();
     let num_threads = rayon::current_num_threads();
@@ -202,7 +204,12 @@ pub fn lagrange_interpolate<F: Field + Ord>(points: &[F], evals: &[F]) -> Vec<F>
         let mut denoms = Vec::with_capacity(points.len());
         for (j, x_j) in points.iter().enumerate() {
             let mut denom = Vec::with_capacity(points.len() - 1);
-            for x_k in points.iter().enumerate().filter(|&(k, _)| k != j).map(|a| a.1) {
+            for x_k in points
+                .iter()
+                .enumerate()
+                .filter(|&(k, _)| k != j)
+                .map(|a| a.1)
+            {
                 denom.push(*x_j - x_k);
             }
             denoms.push(denom);
@@ -366,7 +373,7 @@ use midnight_curves::Fq as Scalar;
 #[cfg(test)]
 use rand_core::OsRng;
 
-use crate::poly::{kzg::msm::MSMKZG, CommitmentLabel};
+use crate::poly::{CommitmentLabel, kzg::msm::MSMKZG};
 
 #[test]
 fn test_lagrange_interpolate() {

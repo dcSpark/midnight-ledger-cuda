@@ -1,0 +1,24 @@
+[package]
+name = "midnight-cuda-resident-multiopen-regression"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+publish = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+
+[features]
+default = []
+cuda = ["dep:midnight-proofs"]
+
+[dependencies]
+midnight-proofs = { version = "=0.8.1", default-features = false, optional = true, features = ["cuda-resident-multiopen-test-support"] }
+
+[[test]]
+name = "resident_multiopen"
+path = "tests/resident_multiopen.rs"
+required-features = ["cuda"]
