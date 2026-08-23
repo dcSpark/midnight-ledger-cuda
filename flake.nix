@@ -57,19 +57,31 @@
           ./ledger
           ./ledger-wasm
           ./proof-server
+          ./proof-server-cuda
+          ./cuda-resident-multiopen-regression
+          ./midnight-gpu-prover
+          ./midnight-metal-prover
+          ./midnight-sppark-msm
           ./storage
+          ./storage-core
+          ./storage-macros
           ./zkir
           ./zkir-v3
+          ./zkir-wasm
+          ./zkir-v3-wasm
           ./base-crypto-derive
           ./base-crypto
           ./transient-crypto
           ./coin-structure
           ./serialize
+          ./serialize-macros
           ./onchain-vm
           ./onchain-state
           ./onchain-runtime
           ./onchain-runtime-wasm
           ./generate-cost-model
+          ./vendor
+          ./rust-toolchain.toml
           ./rustfmt.toml
           ./wasm-proving-demos/zkir-mt
         ];
@@ -143,7 +155,13 @@
               }.${if isCrossArm then "aarch64-linux" else system};
 
               checkPhase = ''
-                cargo clippy --all-targets --workspace --all -- -Dwarnings -Aclippy::type_complexity -Aclippy::mutable_key_type -Aclippy::too_many_arguments -Aclippy::derived_hash_with_manual_eq -Aclippy::unbuffered_bytes
+                cargo clippy --all-targets --workspace \
+                  --exclude midnight-sppark-msm \
+                  --exclude midnight-metal-prover \
+                  --exclude midnight-gpu-prover \
+                  --exclude midnight-cuda-resident-multiopen-regression \
+                  --exclude midnight-proof-server-cuda \
+                  -- -Dwarnings -Aclippy::type_complexity -Aclippy::mutable_key_type -Aclippy::too_many_arguments -Aclippy::derived_hash_with_manual_eq -Aclippy::unbuffered_bytes
                 ${if heavy-checks then "cargo test --release --target ${CARGO_BUILD_TARGET}" else ""}
               '';
               cargoBuildFlags = (if build-target != null then "--package ${build-target} " else "") + "--target ${CARGO_BUILD_TARGET}";
@@ -501,7 +519,13 @@
               export MIDNIGHT_PP="${packages.local-params}";
               export RUSTDOCFLAGS="--cfg nix_doc"
               export MIDNIGHT_LEDGER_EXPERIMENTAL=1
-              cargo doc --all-features -Zunstable-options --keep-going "$@"
+              # Native CUDA and Metal APIs are documented in their provisioned
+              # lanes; blanket all-features would invoke nvcc in this portable app.
+              cargo doc --workspace --no-deps \
+                --exclude midnight-sppark-msm \
+                --exclude midnight-metal-prover \
+                --exclude midnight-cuda-resident-multiopen-regression \
+                -Zunstable-options --keep-going "$@"
             '';
           in {
             type = "app";

@@ -57,18 +57,20 @@ jobs:
           git remote update
           git fetch
           git checkout master
-          nix develop .#default -c cargo bench --all-features --bench benchmarking -- --save-baseline before
+          # Blanket all-features enables gpu-blitzar and requires nvcc. This
+          # generic runner records the portable benchmark baseline only.
+          nix develop .#default -c cargo bench --bench benchmarking -- --save-baseline before
           rm target/release -rf
           git stash
           git checkout $BRANCH_NAME
-          nix develop .#default -c cargo bench --all-features --bench benchmarking -- --save-baseline after
-          nix develop .#default -c cargo bench --all-features --bench benchmarking -- --load-baseline before --baseline after | tee benchmark-output.txt
+          nix develop .#default -c cargo bench --bench benchmarking -- --save-baseline after
+          nix develop .#default -c cargo bench --bench benchmarking -- --load-baseline before --baseline after | tee benchmark-output.txt
           rm target/release -rf
 
       - name: Benchmark with criterion
         run: |
           nix develop .#default -c cargo install cargo-criterion
-          nix develop .#default -c cargo criterion --all-features
+          nix develop .#default -c cargo criterion
 
       - name: Attach benchmark output
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

@@ -9,11 +9,12 @@ usage() {
   cat <<'EOF'
 Usage:
   scripts/gpuprof.sh analyze <bundle-dir>
-  scripts/gpuprof.sh parity [--backend cpu|cuda|both] [--fixture zswap-transaction|minimal-v2|hash-chain-v2|zswap-output|zswap-spend] [--repeat N]
+  scripts/gpuprof.sh parity [--backend cpu|cuda|metal|metal-hybrid|cpu-vs-cuda|cpu-vs-metal|cpu-vs-metal-hybrid] [--fixture zswap-transaction|minimal-v2|hash-chain-v2|zswap-output|zswap-spend] [--repeat N] [--metal-quotient-diagnostic]
   scripts/gpuprof.sh cuda-adapter
   scripts/gpuprof.sh run proof-backend-parity [options]
   scripts/gpuprof.sh doctor
   scripts/gpuprof.sh nsys <gate> [options]
+  scripts/gpuprof.sh metal-trace <gate> [options]
   scripts/gpuprof.sh diff <baseline-bundle> <candidate-bundle>
   scripts/gpuprof.sh check <baseline-bundle> <candidate-bundle> [--tolerance F]
   scripts/gpuprof.sh trend [--last N]
@@ -31,8 +32,14 @@ Current status:
            Defaults to the main zswap-transaction gate: wallet and fee
            balancing, transaction proving/sealing, and byte-exact comparison.
            Other fixtures are retained only as focused diagnostics.
+           cpu-vs-* modes are separate alternating runs, not hybrid runtimes;
+           legacy both, cpu-metal, and cpu-metal-hybrid aliases remain accepted.
+           --metal-quotient-diagnostic is a trusted-local, five-proof shadow
+           gate; it does not substitute Metal output into the proof.
   nsys     Collect a proof-backend-parity Nsight bundle: builds with
            perf-timers, profiles, exports SQLite, analyzes, appends history.
+  metal-trace  Collect a proof-backend-parity Apple Metal System Trace bundle
+           with xctrace, parity JSON, and host/toolchain provenance.
   diff     Exploratory per-stage delta between two analyzed bundles.
   check    Exit-coded regression gate with structural causes on every FAIL.
   trend    Collection history from benchmark-results/gpuprof-history.jsonl.
@@ -122,6 +129,10 @@ case "$1" in
   nsys)
     shift
     exec python3 "${gpuprof_py}" nsys "$@"
+    ;;
+  metal-trace|xctrace)
+    shift
+    exec python3 "${gpuprof_py}" metal-trace "$@"
     ;;
   doctor)
     doctor

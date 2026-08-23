@@ -20,10 +20,56 @@ from proofscope.parse import TS_RE, parse_phase_line
 from proofscope.report import render_summary
 
 
+# The parity binary retains its original compact spellings. The clearer
+# `cpu-vs-*` names are profiler-facing aliases: they request two separate,
+# alternating proof runs and never combine accelerator implementations.
+BACKEND_ALIASES = {
+    "cpu-vs-cuda": "both",
+    "cpu-vs-metal": "cpu-metal",
+    "cpu-vs-metal-hybrid": "cpu-metal-hybrid",
+}
+BACKEND_CHOICES = (
+    "cpu",
+    "cuda",
+    "metal",
+    "metal-hybrid",
+    "both",
+    "cpu-metal",
+    "cpu-metal-hybrid",
+    *BACKEND_ALIASES,
+)
+
+
+def normalized_backend(backend):
+    """Return the spelling accepted by the proof-backend-parity binary."""
+    return BACKEND_ALIASES.get(backend, backend)
+
+
+def backend_uses_cuda(backend):
+    """Whether this selection executes a CUDA route in at least one sample."""
+    return normalized_backend(backend) in ("cuda", "both")
+
+
+def backend_uses_metal(backend):
+    """Whether this selection executes a Metal route in at least one sample."""
+    return normalized_backend(backend) in (
+        "metal",
+        "metal-hybrid",
+        "cpu-metal",
+        "cpu-metal-hybrid",
+    )
+
+
 def add_gate_args(parser, default_backend):
     parser.add_argument("gate")
     parser.add_argument(
-        "--backend", choices=("cpu", "cuda", "both"), default=default_backend
+        "--backend",
+        choices=BACKEND_CHOICES,
+        default=default_backend,
+        help=(
+            "proof route or paired comparison; cpu-vs-* runs canonical CPU and "
+            "the named accelerator as separate alternating samples"
+        ),
     )
     parser.add_argument(
         "--fixture",
@@ -42,25 +88,39 @@ def add_gate_args(parser, default_backend):
     parser.add_argument("--seed", default="24301")
     parser.add_argument("--json", help="write a machine-readable parity report")
     parser.add_argument(
+        "--metal-quotient-diagnostic",
+        action="store_true",
+        help=(
+            "enable the trusted-local resident quotient shadow on the five-proof "
+            "Metal-hybrid transaction gate"
+        ),
+    )
+    parser.add_argument(
         "--cargo-features",
         default=None,
         help=(
             "comma-separated features used to build the parity binary "
-            "(default: deterministic-test-rng, plus gpu-blitzar for CUDA and perf-timers for collection)"
+            "(default: deterministic-test-rng, plus the requested accelerator and perf-timers for collection)"
         ),
     )
 
 
 def resolve_cargo_features(args, collection):
     if args.cargo_features:
-        return args.cargo_features
-    features = ["deterministic-test-rng"]
-    if collection:
-        # Collection is useless without stamped stage ranges, and a CUDA
-        # backend request needs the GPU feature compiled in.
-        features.append("perf-timers")
-    if args.backend != "cpu":
-        features.append("gpu-blitzar")
+        features = [feature for feature in args.cargo_features.split(",") if feature]
+    else:
+        features = ["deterministic-test-rng"]
+        if collection:
+            # Collection is useless without stamped stage ranges, and a CUDA
+            # backend request needs the GPU feature compiled in.
+            features.append("perf-timers")
+        if backend_uses_cuda(args.backend):
+            features.append("gpu-blitzar")
+        elif backend_uses_metal(args.backend):
+            features.append("metal")
+    if getattr(args, "metal_quotient_diagnostic", False):
+        features.extend(("metal", "metal-quotient-diagnostic"))
+    features = list(dict.fromkeys(features))
     return ",".join(features)
 
 
@@ -70,12 +130,31 @@ def parity_environment(args):
     # through the ledger test resolver. No fixture keys are read from this
     # directory, but the helper requires a valid root path.
     env.setdefault("MIDNIGHT_LEDGER_TEST_STATIC_DIR", str(SCRIPT_DIR.parent))
-    # The current zswap transaction relations still use CUDA leaf paths. Those
-    # paths share sppark scratch state, so serialize calls until every proof
-    # type has a resident context with owned scratch.
-    if args.fixture.startswith("zswap-"):
+    # CUDA zswap paths share sppark scratch state, so serialize those calls until
+    # every proof type has a resident context with owned scratch. Metal and CPU
+    # lanes are separate builds and must not inherit a CUDA-only control.
+    if args.fixture.startswith("zswap-") and backend_uses_cuda(args.backend):
         env.setdefault("MIDNIGHT_GPU_SPPARK_LOCK", "on")
+    else:
+        env.pop("MIDNIGHT_GPU_SPPARK_LOCK", None)
+    if getattr(args, "metal_quotient_diagnostic", False):
+        env["MIDNIGHT_METAL_QUOTIENT_DIAGNOSTIC"] = "1"
+    else:
+        env.pop("MIDNIGHT_METAL_QUOTIENT_DIAGNOSTIC", None)
     return env
+
+
+def validate_metal_quotient_args(args):
+    """Reject profiler selections that could mislabel the quotient diagnostic."""
+    if not getattr(args, "metal_quotient_diagnostic", False):
+        return None
+    if normalized_backend(args.backend) not in ("metal-hybrid", "cpu-metal-hybrid"):
+        return "--metal-quotient-diagnostic requires metal-hybrid or cpu-vs-metal-hybrid"
+    if args.fixture != "zswap-transaction":
+        return "--metal-quotient-diagnostic requires --fixture zswap-transaction"
+    if args.warmup < 2 or args.repeat < 5:
+        return "--metal-quotient-diagnostic requires --warmup >= 2 and --repeat >= 5"
+    return None
 
 
 def run_command_capture(cmd):
@@ -86,8 +165,10 @@ def run_command_capture(cmd):
         return None
 
 
-def collect_provenance(repo_root):
+def collect_provenance(repo_root, effective_env=None):
     """Environment facts stamped into every collection bundle."""
+    if effective_env is None:
+        effective_env = os.environ
     git_head = run_command_capture(["git", "-C", str(repo_root), "rev-parse", "HEAD"])
     git_dirty = run_command_capture(["git", "-C", str(repo_root), "status", "--porcelain"])
     smi = run_command_capture(
@@ -100,15 +181,37 @@ def collect_provenance(repo_root):
             gpu_name, driver = parts[0], parts[1]
         if len(parts) >= 3:
             gpu_memory = parts[2]
+    apple_gpu = None
+    displays = run_command_capture(["system_profiler", "SPDisplaysDataType", "-json"])
+    if displays:
+        try:
+            adapters = json.loads(displays).get("SPDisplaysDataType", [])
+            if adapters:
+                adapter = adapters[0]
+                apple_gpu = {
+                    "name": adapter.get("sppci_model") or adapter.get("_name"),
+                    "cores": adapter.get("sppci_cores"),
+                    "metal": adapter.get("spdisplays_mtlgpufamilysupport"),
+                }
+        except (TypeError, ValueError):
+            apple_gpu = {"raw": displays.splitlines()[0]}
     return {
         "git_head": git_head,
         "git_dirty": bool(git_dirty),
+        "architecture": run_command_capture(["uname", "-m"]),
+        "macos_version": run_command_capture(["sw_vers", "-productVersion"]),
+        "xcode": run_command_capture(["xcodebuild", "-version"]),
+        "metal_compiler": run_command_capture(
+            ["xcrun", "--sdk", "macosx", "metal", "--version"]
+        ),
+        "thermal_state": run_command_capture(["pmset", "-g", "therm"]),
+        "apple_gpu": apple_gpu,
         "gpu_name": gpu_name,
         "driver": driver,
         "gpu_memory": gpu_memory,
         "midnight_env": {
             key: value
-            for key, value in sorted(os.environ.items())
+            for key, value in sorted(effective_env.items())
             if key.startswith(("MIDNIGHT_GPU_", "MIDNIGHT_PROVER_", "MIDNIGHT_PROOF_SERVER_"))
         },
     }
@@ -138,6 +241,16 @@ def append_history(history_path, entry):
         print(f"history: skipped ({exc})")
 
 
+def stamp_parity_provenance(json_path, repo_root, effective_env=None):
+    """Attach the host/toolchain snapshot beside raw parity samples."""
+    path = Path(json_path)
+    if not path.is_absolute():
+        path = repo_root / path
+    body = json.loads(path.read_text(encoding="utf-8"))
+    body["provenance"] = collect_provenance(repo_root, effective_env)
+    path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+
+
 def require_parity_gate(gate):
     if gate == "proof-backend-parity":
         return None
@@ -150,7 +263,7 @@ def require_parity_gate(gate):
 def parity_args(args, json_path=None):
     cmd = [
         "--backend",
-        args.backend,
+        normalized_backend(args.backend),
         "--fixture",
         args.fixture,
         "--hash-rounds",
@@ -169,12 +282,13 @@ def parity_args(args, json_path=None):
     return cmd
 
 
-def build_parity_binary(repo_root, cargo_features):
+def build_parity_binary(repo_root, cargo_features, profile="release"):
     return subprocess.run(
         [
             "cargo",
             "build",
-            "--release",
+            "--profile",
+            profile,
             "-p",
             "midnight-proof-server",
             "--features",
@@ -197,9 +311,9 @@ def tool_path(name):
     return None
 
 
-def runtime_library_path(repo_root):
+def runtime_library_path(repo_root, profile="release"):
     paths = []
-    for so_path in (repo_root / "target" / "release" / "build").glob("*/out/*.so"):
+    for so_path in (repo_root / "target" / profile / "build").glob("*/out/*.so"):
         parent = str(so_path.parent)
         if parent not in paths:
             paths.append(parent)
@@ -216,7 +330,7 @@ def main(argv=None):
     analyze = sub.add_parser("analyze", help="analyze an existing proof-server Nsight bundle")
     analyze.add_argument("bundle_dir")
 
-    run = sub.add_parser("run", help="run the deterministic CPU/CUDA parity gate")
+    run = sub.add_parser("run", help="run the deterministic CPU/accelerator parity gate")
     add_gate_args(run, default_backend="both")
 
     nsys = sub.add_parser("nsys", help="collect an Nsight Systems bundle for a wired gate")
@@ -225,6 +339,15 @@ def main(argv=None):
     nsys.add_argument("--trace", default="cuda,nvtx,osrt")
     nsys.add_argument("--sample", default="none")
     nsys.add_argument("--force-overwrite", action="store_true", default=True)
+
+    metal = sub.add_parser(
+        "metal-trace", help="collect an Apple Metal System Trace bundle for a wired gate"
+    )
+    add_gate_args(metal, default_backend="metal-hybrid")
+    metal.add_argument("--out-dir", help="artifact bundle directory")
+    metal.add_argument("--template", default="Metal System Trace")
+    metal.add_argument("--time-limit", help="optional xctrace limit such as 30s or 2m")
+    metal.add_argument("--force-overwrite", action="store_true")
 
     diff = sub.add_parser("diff", help="exploratory per-stage delta between two analyzed bundles")
     diff.add_argument("baseline")
@@ -246,6 +369,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
     repo_root = SCRIPT_DIR.parent
     history_path = repo_root / "benchmark-results" / "gpuprof-history.jsonl"
+    if hasattr(args, "metal_quotient_diagnostic"):
+        quotient_error = validate_metal_quotient_args(args)
+        if quotient_error:
+            print(f"error: {quotient_error}", file=sys.stderr)
+            return 2
 
     if args.command == "analyze":
         try:
@@ -329,12 +457,26 @@ def main(argv=None):
             "--",
             *parity_args(args),
         ]
-        return subprocess.run(cmd, cwd=repo_root, env=parity_environment(args)).returncode
+        env = parity_environment(args)
+        rc = subprocess.run(cmd, cwd=repo_root, env=env).returncode
+        if rc == 0 and args.json:
+            try:
+                stamp_parity_provenance(args.json, repo_root, env)
+            except (OSError, ValueError) as exc:
+                print(f"error: could not stamp parity provenance: {exc}", file=sys.stderr)
+                return 3
+        return rc
 
     if args.command == "nsys":
         gate_error = require_parity_gate(args.gate)
         if gate_error:
             print(gate_error, file=sys.stderr)
+            return 2
+        if backend_uses_metal(args.backend):
+            print(
+                "error: Nsight Systems cannot profile Metal; use the Metal System Trace workflow",
+                file=sys.stderr,
+            )
             return 2
         nsys_path = tool_path("nsys")
         if not nsys_path:
@@ -342,7 +484,8 @@ def main(argv=None):
             return 2
 
         cargo_features = resolve_cargo_features(args, collection=True)
-        build_rc = build_parity_binary(repo_root, cargo_features)
+        cargo_profile = "profiling"
+        build_rc = build_parity_binary(repo_root, cargo_features, cargo_profile)
         if build_rc != 0:
             return build_rc
 
@@ -366,7 +509,7 @@ def main(argv=None):
         if not json_path.is_absolute():
             json_path = repo_root / json_path
 
-        binary = repo_root / "target" / "release" / "proof-backend-parity"
+        binary = repo_root / "target" / cargo_profile / "proof-backend-parity"
         profile_cmd = [
             nsys_path,
             "profile",
@@ -378,6 +521,14 @@ def main(argv=None):
             str(binary),
             *parity_args(args, json_path=json_path),
         ]
+        env = parity_environment(args)
+        # Prover-internal stage ranges are runtime-gated; collection without
+        # them cannot attribute anything below proof_server.prove.execute.
+        env.setdefault("MIDNIGHT_PROVER_TIMERS", "1")
+        ld_library_path = runtime_library_path(repo_root, cargo_profile)
+        if ld_library_path:
+            env["LD_LIBRARY_PATH"] = ld_library_path
+
         metadata = {
             "created_at": stamp,
             "gate": args.gate,
@@ -388,23 +539,17 @@ def main(argv=None):
             "warmup": args.warmup,
             "seed": args.seed,
             "cargo_features": cargo_features,
+            "cargo_profile": cargo_profile,
             "nsys": nsys_path,
             "profile_command": profile_cmd,
             "json": str(json_path),
             "nsys_report": str(report_rep),
             "nsys_sqlite": str(report_sqlite),
-            "ld_library_path": runtime_library_path(repo_root),
-            **collect_provenance(repo_root),
+            "ld_library_path": ld_library_path,
+            **collect_provenance(repo_root, env),
         }
         (out_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
 
-        env = parity_environment(args)
-        # Prover-internal stage ranges are runtime-gated; collection without
-        # them cannot attribute anything below proof_server.prove.execute.
-        env.setdefault("MIDNIGHT_PROVER_TIMERS", "1")
-        ld_library_path = runtime_library_path(repo_root)
-        if ld_library_path:
-            env["LD_LIBRARY_PATH"] = ld_library_path
         with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
             rc = subprocess.run(
                 profile_cmd,
@@ -416,6 +561,11 @@ def main(argv=None):
         if rc != 0:
             print(f"nsys profile failed; see {stderr_path}", file=sys.stderr)
             return rc
+        try:
+            stamp_parity_provenance(json_path, repo_root, env)
+        except (OSError, ValueError) as exc:
+            print(f"error: could not stamp parity provenance: {exc}", file=sys.stderr)
+            return 3
 
         export_cmd = [
             nsys_path,
@@ -476,6 +626,130 @@ def main(argv=None):
             },
         )
         return 0 if report["reconciliation"]["ok"] else 2
+
+    if args.command == "metal-trace":
+        gate_error = require_parity_gate(args.gate)
+        if gate_error:
+            print(gate_error, file=sys.stderr)
+            return 2
+        if not backend_uses_metal(args.backend):
+            print(
+                "error: metal-trace requires a Metal backend or CPU-vs-Metal comparison",
+                file=sys.stderr,
+            )
+            return 2
+        xctrace_path = run_command_capture(["xcrun", "--find", "xctrace"])
+        if not xctrace_path:
+            print("error: xctrace not found in the selected Xcode", file=sys.stderr)
+            return 2
+
+        cargo_features = resolve_cargo_features(args, collection=True)
+        cargo_profile = "profiling"
+        build_rc = build_parity_binary(repo_root, cargo_features, cargo_profile)
+        if build_rc != 0:
+            return build_rc
+
+        stamp = _datetime.datetime.now(_datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        fixture_label = args.fixture
+        if args.fixture == "hash-chain-v2":
+            fixture_label = f"{fixture_label}-rounds{args.hash_rounds}"
+        out_dir = Path(args.out_dir) if args.out_dir else (
+            repo_root / "benchmark-results" / f"gpuprof-metal-{fixture_label}-{stamp}"
+        )
+        if not out_dir.is_absolute():
+            out_dir = repo_root / out_dir
+        trace_path = out_dir / "metal-system.trace"
+        if trace_path.exists():
+            if not args.force_overwrite:
+                print(
+                    f"error: trace already exists at {trace_path}; pass --force-overwrite",
+                    file=sys.stderr,
+                )
+                return 2
+            shutil.rmtree(trace_path)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        stdout_path = out_dir / "stdout.txt"
+        stderr_path = out_dir / "stderr.txt"
+        xctrace_stdout_path = out_dir / "xctrace-stdout.txt"
+        json_path = Path(args.json) if args.json else out_dir / "gpuprof.json"
+        if not json_path.is_absolute():
+            json_path = repo_root / json_path
+        binary = repo_root / "target" / cargo_profile / "proof-backend-parity"
+        profile_cmd = [
+            xctrace_path,
+            "record",
+            "--template",
+            args.template,
+            "--output",
+            str(trace_path),
+            "--no-prompt",
+            "--target-stdout",
+            str(stdout_path),
+        ]
+        if args.time_limit:
+            profile_cmd.extend(["--time-limit", args.time_limit])
+        profile_cmd.extend(
+            ["--launch", "--", str(binary), *parity_args(args, json_path=json_path)]
+        )
+
+        env = parity_environment(args)
+        env.setdefault("MIDNIGHT_PROVER_TIMERS", "1")
+
+        metadata = {
+            "created_at": stamp,
+            "gate": args.gate,
+            "backend": args.backend,
+            "fixture": args.fixture,
+            "hash_rounds": args.hash_rounds,
+            "repeat": args.repeat,
+            "warmup": args.warmup,
+            "seed": args.seed,
+            "cargo_features": cargo_features,
+            "cargo_profile": cargo_profile,
+            "xctrace": xctrace_path,
+            "template": args.template,
+            "profile_command": profile_cmd,
+            "json": str(json_path),
+            "trace": str(trace_path),
+            **collect_provenance(repo_root, env),
+        }
+        (out_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+
+        with xctrace_stdout_path.open("w") as xctrace_stdout, stderr_path.open("w") as stderr:
+            rc = subprocess.run(
+                profile_cmd,
+                cwd=repo_root,
+                stdout=xctrace_stdout,
+                stderr=stderr,
+                env=env,
+            ).returncode
+        if rc != 0:
+            print(f"xctrace recording failed; see {stderr_path}", file=sys.stderr)
+            return rc
+        if not trace_path.exists():
+            print("error: xctrace completed without producing a trace", file=sys.stderr)
+            return 3
+        stamped = stamped_timer_lines(stderr_path)
+        if stamped == 0:
+            print(
+                "error: no stamped perf-timer lines in stderr - the profiled binary was "
+                "built without perf-timers (or is stale); the Metal trace cannot be attributed. "
+                f"Rebuild with --cargo-features {cargo_features}",
+                file=sys.stderr,
+            )
+            return 3
+        try:
+            stamp_parity_provenance(json_path, repo_root, env)
+        except (OSError, ValueError) as exc:
+            print(f"error: could not stamp parity provenance: {exc}", file=sys.stderr)
+            return 3
+
+        print(f"bundle={out_dir}")
+        print(f"json={json_path}")
+        print(f"trace={trace_path}")
+        print(f"stamped_timer_lines={stamped}")
+        return 0
 
     print(
         f"error: gpuprof {args.command} is reserved for the accepted-baseline workflow "
