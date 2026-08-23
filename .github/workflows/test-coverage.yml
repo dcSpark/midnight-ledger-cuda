@@ -55,7 +55,16 @@ jobs:
           export CARGO_INCREMENTAL=0
           export RUSTFLAGS='-Cinstrument-coverage'
           export LLVM_PROFILE_FILE='cargo-test-%p-%m.profraw'
-          nix develop -c cargo test --all --all-features --verbose -- --nocapture --test-threads=1
+          # Accelerator features transitively invoke native CUDA or Metal
+          # toolchains. Coverage here is the portable workspace baseline;
+          # provisioned accelerator lanes own their feature-specific coverage.
+          nix develop -c cargo test --workspace --verbose \
+            --exclude midnight-sppark-msm \
+            --exclude midnight-metal-prover \
+            --exclude midnight-gpu-prover \
+            --exclude midnight-cuda-resident-multiopen-regression \
+            --exclude midnight-proof-server-cuda \
+            -- --nocapture --test-threads=1
 
       - name: Generate HTML report
         run: |

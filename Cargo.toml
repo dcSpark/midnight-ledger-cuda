@@ -2,11 +2,15 @@
 package.license = "Apache-2.0"
 package.repository = "https://github.com/midnightntwrk/midnight-ledger"
 members = [
+    "bls12-381-metal-msm",
     "zswap",
     "ledger",
     "ledger-wasm",
     "proof-server",
     "proof-server-cuda",
+    "cuda-resident-multiopen-regression",
+    "midnight-gpu-prover",
+    "midnight-metal-prover",
     "midnight-sppark-msm",
     "onchain-runtime",
     "onchain-runtime-wasm",
@@ -26,7 +30,7 @@ members = [
     "generate-cost-model",
     "wasm-proving-demos/zkir-mt",
     "static",
-    "storage-core"
+    "storage-core",
 ]
 default-members = [
     "zswap",
@@ -46,7 +50,12 @@ default-members = [
 ]
 resolver = "2"
 exclude = [
-    "scripts/hardfork_version_patch"
+    "scripts/hardfork_version_patch",
+    # This is a normalized published manifest with stale examples, benches,
+    # and integration tests. Keep it available through the patch below without
+    # selecting those targets or unifying every protocol feature in broad
+    # workspace jobs.
+    "vendor/midnight-proofs-0.8.1",
 ]
 
 # Pretty much every dependency is crypto.
@@ -56,6 +65,15 @@ exclude = [
 opt-level = 2
 [profile.test.package."*"]
 opt-level = 2
+
+# Optimized binaries with enough symbol information for Metal System Trace and
+# Instruments. Keep this separate from release artifacts, which may be stripped.
+[profile.profiling]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+debug = 2
+strip = false
 
 [profile.wasm]
 inherits = "release"

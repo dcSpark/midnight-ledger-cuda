@@ -66,22 +66,109 @@ jobs:
         run: |
           nix develop .#ci -c cargo spellcheck -j1
 
-      # Run Cargo Clippy on the whole workspace with all features. This is important
-      # to avoid bitrot of code that is feature gated behind non-default features
-      # or in pkgs which aren't in Cargo.toml#default-members, since we don't
-      # include --workspace or --all-features in ouor build-and-test recipe
-      # below.
-      # We still permit certain Clippy rules with `-A` args. since they will be
-      # addressed in upcoming PRs and changes that are currently in progress. This
-      # allows us to start running these checks even before they are fully implemented.
-      - name: Cargo clippy (--all-targets --workspace --all-features --all -- -Dwarnings -Aclippy::type_complexity -Aclippy::mutable_key_type -Aclippy::too_many_arguments -Aclippy::derived_hash_with_manual_eq -Aclippy::unbuffered_bytes)
-        run: MIDNIGHT_LEDGER_EXPERIMENTAL=1 MIDNIGHT_PP='' cargo clippy --all-targets --workspace --all-features --all -- -Dwarnings -Aclippy::type_complexity -Aclippy::mutable_key_type -Aclippy::too_many_arguments -Aclippy::derived_hash_with_manual_eq -Aclippy::unbuffered_bytes
+      # Native CUDA and Metal features require provisioned toolchains and are
+      # checked in their own lanes. Keep this lane portable: selecting every
+      # feature here would invoke nvcc on a generic runner, and selecting the
+      # Metal package in a Nix sandbox would invoke Xcode outside its native lane.
+      - name: Cargo clippy (portable workspace defaults)
+        run: |
+          MIDNIGHT_LEDGER_EXPERIMENTAL=1 MIDNIGHT_PP='' cargo clippy \
+            --all-targets --workspace \
+            --exclude midnight-sppark-msm \
+            --exclude midnight-metal-prover \
+            --exclude midnight-gpu-prover \
+            --exclude midnight-cuda-resident-multiopen-regression \
+            --exclude midnight-proof-server-cuda \
+            -- -Dwarnings -Aclippy::type_complexity -Aclippy::mutable_key_type -Aclippy::too_many_arguments -Aclippy::derived_hash_with_manual_eq -Aclippy::unbuffered_bytes
+
+      - name: Cargo clippy (portable accelerator facades)
+        run: |
+          MIDNIGHT_LEDGER_EXPERIMENTAL=1 MIDNIGHT_PP='' cargo clippy --locked \
+            -p midnight-gpu-prover -p midnight-proof-server-cuda \
+            --no-default-features --lib --no-deps -- -Dwarnings
+          MIDNIGHT_LEDGER_EXPERIMENTAL=1 MIDNIGHT_PP='' cargo clippy --locked \
+            -p midnight-metal-prover --all-targets --no-deps -- -Dwarnings
+          MIDNIGHT_LEDGER_EXPERIMENTAL=1 MIDNIGHT_PP='' cargo clippy --locked \
+            -p midnight-gpu-prover --features metal --all-targets --no-deps -- -Dwarnings
+          MIDNIGHT_LEDGER_EXPERIMENTAL=1 MIDNIGHT_PP='' cargo clippy --locked \
+            -p midnight-proof-server --features metal --lib --no-deps -- -Dwarnings
+
+      - name: Test unsupported Metal surface on Linux
+        run: |
+          MIDNIGHT_LEDGER_EXPERIMENTAL=1 MIDNIGHT_PP='' cargo test --locked \
+            -p midnight-metal-prover --all-targets
+          MIDNIGHT_LEDGER_EXPERIMENTAL=1 MIDNIGHT_PP='' cargo test --locked \
+            -p midnight-gpu-prover --features metal
+          MIDNIGHT_LEDGER_EXPERIMENTAL=1 MIDNIGHT_PP='' cargo test --locked \
+            -p midnight-proof-server --features metal prover_backend
 
       - name: Cargo doc
-        run: MIDNIGHT_LEDGER_EXPERIMENTAL=1 MIDNIGHT_PP='' cargo doc --all-features --no-deps
+        run: MIDNIGHT_LEDGER_EXPERIMENTAL=1 MIDNIGHT_PP='' cargo doc --workspace --no-deps --exclude midnight-sppark-msm --exclude midnight-metal-prover --exclude midnight-cuda-resident-multiopen-regression
 
       - name: Cargo audit
         run: MIDNIGHT_LEDGER_EXPERIMENTAL=1 nix develop .#ci -c cargo audit
+
+  metal-backend:
+    # macos-15 is an Apple-silicon hosted runner, so this lane always compiles
+    # the real metallib. Standard GitHub-hosted M1 VMs do not promise GPU
+    # acceleration; device tests run only when the runner exposes Metal.
+    runs-on: macos-15
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Configure cargo
+        run: .github/scripts/configure-cargo.sh
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+
+      - name: Verify Apple Metal toolchain
+        run: |
+          test "$(uname -m)" = arm64
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent metalToolchain
+          fi
+          xcrun --sdk macosx --find metal
+          xcrun --sdk macosx --find metallib
+
+      - name: Probe Metal device
+        id: metal-device
+        shell: bash
+        run: |
+          if xcrun swift -e 'import Darwin; import Metal; guard let device = MTLCreateSystemDefaultDevice() else { exit(1) }; print(device.name)' ; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::This standard macOS runner exposes no Metal device; native tests require an xlarge or physical Apple-silicon runner."
+          fi
+
+      - name: Compile native Metal tests
+        run: |
+          cargo test --locked -p midnight-metal-prover --all-targets --no-run
+          cargo test --locked -p bls12-381-metal-msm \
+            --features metal-diagnostics --all-targets --no-run
+
+      - name: Test fail-closed Metal routing
+        run: |
+          cargo test --locked -p midnight-gpu-prover --features metal
+          cargo test --locked -p midnight-proof-server --features metal prover_backend
+
+      - name: Test native Metal primitives
+        if: steps.metal-device.outputs.available == 'true'
+        run: |
+          cargo test --locked -p midnight-metal-prover --all-targets -- --test-threads=1
+          cargo test --locked -p bls12-381-metal-msm \
+            --features metal-diagnostics --all-targets -- --test-threads=1
+
+      - name: Clippy native Metal boundary
+        run: |
+          cargo clippy --locked -p midnight-metal-prover -p midnight-gpu-prover --features metal --all-targets --no-deps -- -D warnings
+          cargo clippy --locked -p midnight-proof-server --features metal --lib --no-deps -- -D warnings
+          cargo clippy --locked -p bls12-381-metal-msm \
+            --features metal-diagnostics --all-targets -- -D warnings
 
   build-wasm:
     strategy:

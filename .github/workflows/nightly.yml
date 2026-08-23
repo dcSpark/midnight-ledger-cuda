@@ -54,7 +54,16 @@ jobs:
           # failures in `nix develop` command.
           set -o pipefail
           nix develop -c cargo config -Z unstable-options get net.git-fetch-with-cli
-          nix develop -c cargo test --workspace --all-features --release  --no-fail-fast -- --nocapture --test-threads=1 | tee test-output.log
+          # Native accelerator features run only in provisioned lanes. In
+          # particular, gpu-blitzar reaches nvcc transitively from otherwise
+          # portable proof crates.
+          nix develop -c cargo test --workspace --release --no-fail-fast \
+            --exclude midnight-sppark-msm \
+            --exclude midnight-metal-prover \
+            --exclude midnight-gpu-prover \
+            --exclude midnight-cuda-resident-multiopen-regression \
+            --exclude midnight-proof-server-cuda \
+            -- --nocapture --test-threads=1 | tee test-output.log
 
       - name: Upload Artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

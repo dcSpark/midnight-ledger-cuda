@@ -845,6 +845,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "block2"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdeb9d870516001442e364c5220d3574d2da8dc765554b4a617230d33fa58ef5"
+dependencies = [
+ "objc2",
+]
+
+[[package]]
+name = "bls12-381-metal-msm"
+version = "0.1.0"
+dependencies = [
+ "blst",
+ "dispatch2",
+ "num-bigint",
+ "objc2",
+ "objc2-foundation",
+ "objc2-metal",
+ "zeroize",
+]
+
+[[package]]
 name = "blst"
 version = "0.3.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1949,6 +1971,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags 2.13.0",
+ "block2",
  "objc2",
 ]
 
@@ -3724,6 +3747,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "midnight-cuda-resident-multiopen-regression"
+version = "0.1.0"
+dependencies = [
+ "midnight-proofs 0.8.1",
+]
+
+[[package]]
 name = "midnight-curves"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3769,6 +3799,7 @@ dependencies = [
  "hex",
  "k256",
  "lazy_static",
+ "midnight-gpu-prover",
  "midnight-sppark-msm",
  "num-bigint",
  "p256",
@@ -3784,6 +3815,15 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "subtle",
+]
+
+[[package]]
+name = "midnight-gpu-prover"
+version = "0.1.0"
+dependencies = [
+ "midnight-metal-prover",
+ "midnight-sppark-msm",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -3869,6 +3909,24 @@ dependencies = [
  "serde_bytes",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "zeroize",
+]
+
+[[package]]
+name = "midnight-metal-prover"
+version = "9.0.0-rc.3"
+dependencies = [
+ "bls12-381-metal-msm",
+ "blst",
+ "dispatch2",
+ "midnight-gpu-prover",
+ "objc2",
+ "objc2-foundation",
+ "objc2-metal",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
  "zeroize",
 ]
 
@@ -3989,9 +4047,11 @@ dependencies = [
  "log",
  "midnight-base-crypto",
  "midnight-coin-structure",
+ "midnight-gpu-prover",
  "midnight-ledger-v9",
  "midnight-onchain-runtime",
  "midnight-proof-server-cuda",
+ "midnight-proofs 0.8.1",
  "midnight-serialize",
  "midnight-sppark-msm",
  "midnight-storage",
@@ -4050,11 +4110,13 @@ dependencies = [
  "ark-serialize",
  "blake2b_simd",
  "blitzar",
+ "blst",
  "ff",
  "getrandom 0.2.17",
  "group",
  "itertools 0.14.0",
  "midnight-curves 0.3.1",
+ "midnight-gpu-prover",
  "midnight-sppark-msm",
  "num-bigint",
  "rand_chacha 0.3.1",
@@ -4063,6 +4125,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -4761,6 +4824,18 @@ checksum = "33fafba39597d6dc1fb709123dfa8289d39406734be322956a69f0931c73bb15"
 dependencies = [
  "libc",
  "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-metal"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0125f776a10d00af4152d74616409f0d4a2053a6f57fa5b7d6aa2854ac04794"
+dependencies = [
+ "bitflags 2.13.0",
+ "dispatch2",
+ "objc2",
+ "objc2-foundation",
 ]
 
 [[package]]
