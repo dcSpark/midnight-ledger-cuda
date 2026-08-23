@@ -1,8 +1,9 @@
 use ff::{PrimeField, WithSmallOrderMulGroup};
 use group::ff::Field;
+#[cfg(feature = "gpu-resident")]
+use std::any::TypeId;
 #[cfg(feature = "gpu-blitzar")]
 use std::{
-    any::TypeId,
     collections::{BTreeMap, HashMap},
     sync::Arc,
 };
@@ -24,10 +25,23 @@ use midnight_sppark_msm::{
     Bls12_381TraceTrashInputs, RawCalculation, RawColumnRef, RawGraph, RawValueSource,
 };
 
+#[cfg(feature = "gpu-blitzar")]
+use midnight_gpu_prover::expression::MAX_GRAPH_SCRATCH_SLOTS;
+#[cfg(feature = "gpu-resident")]
+use midnight_gpu_prover::{
+    RawFr,
+    expression::{
+        CompiledGraph, CompiledGraphFamily, CompiledProtocolGraphFamily, GraphColumnRequirements,
+        GraphFamilyValidationError, GraphOp, GraphOpcode, GraphSourceCounts, GraphValidationError,
+        GraphValueKind, GraphValueRef,
+    },
+};
+
 /// Return the index in the polynomial of size `isize` after rotation `rot`.
 #[inline(always)]
 pub(crate) fn get_rotation_idx(idx: usize, rot: i32, rot_scale: i32, isize: i32) -> usize {
-    (((idx as i32) + (rot * rot_scale)).rem_euclid(isize)) as usize
+    let size = i64::from(isize);
+    ((idx as i64 + i64::from(rot) * i64::from(rot_scale)).rem_euclid(size)) as usize
 }
 
 /// Value used in a calculation
@@ -235,27 +249,155 @@ pub struct CalculationInfo {
     pub target: usize,
 }
 
-#[cfg(feature = "gpu-blitzar")]
-struct SpparkGraphBuffers {
-    constants: Vec<Bls12_381Fr>,
-    rotations: Vec<i32>,
-    calculations: Vec<RawCalculation>,
-    horner_parts: Vec<RawValueSource>,
-    num_intermediates: u32,
+#[cfg(feature = "gpu-resident")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ResidentGraphCompileError {
+    UnsupportedField,
+    FieldLayoutMismatch {
+        field_size: usize,
+        field_alignment: usize,
+    },
+    IntermediateUseCountOverflow {
+        calculation: usize,
+        intermediate: usize,
+    },
+    IntermediateSourceOutOfBounds {
+        calculation: usize,
+        intermediate: usize,
+        limit: usize,
+    },
+    TargetOutOfBounds {
+        calculation: usize,
+        target: usize,
+        limit: usize,
+    },
+    DuplicateTarget {
+        calculation: usize,
+        target: usize,
+    },
+    IntermediateReadBeforeWrite {
+        calculation: usize,
+        intermediate: usize,
+    },
+    MissingTarget {
+        target: usize,
+    },
+    AbiIndexOverflow {
+        role: &'static str,
+        index: usize,
+    },
+    SourceCountOverflow {
+        kind: GraphValueKind,
+        index: u32,
+    },
+    HornerRangeOverflow {
+        calculation: usize,
+        offset: u32,
+        len: u32,
+    },
+    PackedGraph(GraphValidationError),
 }
 
-#[cfg(feature = "gpu-blitzar")]
+#[cfg(feature = "gpu-resident")]
+impl std::fmt::Display for ResidentGraphCompileError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "resident expression graph compilation failed: {self:?}"
+        )
+    }
+}
+
+#[cfg(feature = "gpu-resident")]
+impl std::error::Error for ResidentGraphCompileError {}
+
+#[cfg(feature = "gpu-resident")]
+impl From<GraphValidationError> for ResidentGraphCompileError {
+    fn from(error: GraphValidationError) -> Self {
+        Self::PackedGraph(error)
+    }
+}
+
+/// Failure while lowering an ordered graph family into the neutral resident ABI.
+#[cfg(feature = "gpu-resident")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ResidentGraphFamilyCompileError {
+    /// One logical graph failed before family packing.
+    Graph {
+        graph_index: usize,
+        source: ResidentGraphCompileError,
+    },
+    /// One graph from a protocol-classified evaluator failed to lower.
+    ProtocolGraph {
+        category: ResidentGraphCategory,
+        category_index: usize,
+        graph_index: usize,
+        source: ResidentGraphCompileError,
+    },
+    /// Every graph lowered successfully, but the packed family was invalid.
+    Family(GraphFamilyValidationError),
+}
+
+/// Protocol category attached to a classified graph-lowering error.
+#[cfg(feature = "gpu-resident")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResidentGraphCategory {
+    Custom,
+    Lookup,
+    LookupInput,
+    LookupTable,
+    Trash,
+}
+
+#[cfg(feature = "gpu-resident")]
+impl std::fmt::Display for ResidentGraphFamilyCompileError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Graph {
+                graph_index,
+                source,
+            } => write!(
+                formatter,
+                "resident expression graph family compilation failed at graph {graph_index}: {source}"
+            ),
+            Self::ProtocolGraph {
+                category,
+                category_index,
+                graph_index,
+                source,
+            } => write!(
+                formatter,
+                "resident {category:?} expression graph {category_index} (packed index {graph_index}) failed to compile: {source}"
+            ),
+            Self::Family(source) => write!(
+                formatter,
+                "resident expression graph family packing failed: {source}"
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "gpu-resident")]
+impl std::error::Error for ResidentGraphFamilyCompileError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Graph { source, .. } | Self::ProtocolGraph { source, .. } => Some(source),
+            Self::Family(source) => Some(source),
+        }
+    }
+}
+
+#[cfg(feature = "gpu-resident")]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct IntermediateSlotPlan {
     slots: Vec<u32>,
     capacity: u32,
 }
 
-#[cfg(feature = "gpu-blitzar")]
+#[cfg(feature = "gpu-resident")]
 fn visit_calculation_sources(calculation: &Calculation, mut visit: impl FnMut(&ValueSource)) {
     match calculation {
-        Calculation::Add(lhs, rhs)
-        | Calculation::Sub(lhs, rhs)
-        | Calculation::Mul(lhs, rhs) => {
+        Calculation::Add(lhs, rhs) | Calculation::Sub(lhs, rhs) | Calculation::Mul(lhs, rhs) => {
             visit(lhs);
             visit(rhs);
         }
@@ -273,25 +415,38 @@ fn visit_calculation_sources(calculation: &Calculation, mut visit: impl FnMut(&V
     }
 }
 
-#[cfg(feature = "gpu-blitzar")]
-fn intermediate_slot_plan<F: PrimeField>(graph: &GraphEvaluator<F>) -> Option<IntermediateSlotPlan> {
+#[cfg(feature = "gpu-resident")]
+fn intermediate_slot_plan<F: PrimeField>(
+    graph: &GraphEvaluator<F>,
+) -> Result<IntermediateSlotPlan, ResidentGraphCompileError> {
     let mut remaining_uses = vec![0usize; graph.num_intermediates];
-    for calculation in &graph.calculations {
-        let mut valid = true;
+    for (calculation_index, calculation) in graph.calculations.iter().enumerate() {
+        let mut error = None;
         visit_calculation_sources(&calculation.calculation, |source| {
+            if error.is_some() {
+                return;
+            }
             if let ValueSource::Intermediate(index) = source {
                 if let Some(uses) = remaining_uses.get_mut(*index) {
-                    *uses = uses.checked_add(1).unwrap_or_else(|| {
-                        valid = false;
-                        *uses
-                    });
+                    if let Some(next) = uses.checked_add(1) {
+                        *uses = next;
+                    } else {
+                        error = Some(ResidentGraphCompileError::IntermediateUseCountOverflow {
+                            calculation: calculation_index,
+                            intermediate: *index,
+                        });
+                    }
                 } else {
-                    valid = false;
+                    error = Some(ResidentGraphCompileError::IntermediateSourceOutOfBounds {
+                        calculation: calculation_index,
+                        intermediate: *index,
+                        limit: graph.num_intermediates,
+                    });
                 }
             }
         });
-        if !valid {
-            return None;
+        if let Some(error) = error {
+            return Err(error);
         }
     }
 
@@ -299,27 +454,50 @@ fn intermediate_slot_plan<F: PrimeField>(graph: &GraphEvaluator<F>) -> Option<In
     let mut free_slots = Vec::new();
     let mut next_slot = 0u32;
 
-    for calculation in &graph.calculations {
+    for (calculation_index, calculation) in graph.calculations.iter().enumerate() {
         let target = calculation.target;
-        if target >= slots.len() || slots[target].is_some() {
-            return None;
+        if target >= slots.len() {
+            return Err(ResidentGraphCompileError::TargetOutOfBounds {
+                calculation: calculation_index,
+                target,
+                limit: slots.len(),
+            });
+        }
+        if slots[target].is_some() {
+            return Err(ResidentGraphCompileError::DuplicateTarget {
+                calculation: calculation_index,
+                target,
+            });
         }
 
-        let mut valid = true;
+        let mut error = None;
         visit_calculation_sources(&calculation.calculation, |source| {
+            if error.is_some() {
+                return;
+            }
             let ValueSource::Intermediate(index) = source else {
                 return;
             };
             let Some(Some(slot)) = slots.get(*index) else {
-                valid = false;
+                error = Some(ResidentGraphCompileError::IntermediateReadBeforeWrite {
+                    calculation: calculation_index,
+                    intermediate: *index,
+                });
                 return;
             };
             let Some(uses) = remaining_uses.get_mut(*index) else {
-                valid = false;
+                error = Some(ResidentGraphCompileError::IntermediateSourceOutOfBounds {
+                    calculation: calculation_index,
+                    intermediate: *index,
+                    limit: graph.num_intermediates,
+                });
                 return;
             };
             let Some(next_uses) = uses.checked_sub(1) else {
-                valid = false;
+                error = Some(ResidentGraphCompileError::IntermediateReadBeforeWrite {
+                    calculation: calculation_index,
+                    intermediate: *index,
+                });
                 return;
             };
             *uses = next_uses;
@@ -327,15 +505,21 @@ fn intermediate_slot_plan<F: PrimeField>(graph: &GraphEvaluator<F>) -> Option<In
                 free_slots.push(*slot);
             }
         });
-        if !valid {
-            return None;
+        if let Some(error) = error {
+            return Err(error);
         }
 
         let slot = if let Some(slot) = free_slots.pop() {
             slot
         } else {
             let slot = next_slot;
-            next_slot = next_slot.checked_add(1)?;
+            next_slot = next_slot
+                .checked_add(1)
+                .ok_or(ResidentGraphCompileError::PackedGraph(
+                    GraphValidationError::ScratchCapacityExceeded {
+                        required: u64::from(next_slot) + 1,
+                    },
+                ))?;
             slot
         };
         slots[target] = Some(slot);
@@ -344,112 +528,802 @@ fn intermediate_slot_plan<F: PrimeField>(graph: &GraphEvaluator<F>) -> Option<In
         }
     }
 
-    Some(IntermediateSlotPlan {
-        slots: slots.into_iter().collect::<Option<Vec<_>>>()?,
+    let slots = slots
+        .into_iter()
+        .enumerate()
+        .map(|(target, slot)| slot.ok_or(ResidentGraphCompileError::MissingTarget { target }))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(IntermediateSlotPlan {
+        slots,
         capacity: next_slot,
     })
 }
 
+#[cfg(feature = "gpu-resident")]
+/// One-past-the-maximum logical source indices encoded by a graph.
+///
+/// Lowering deliberately preserves logical column IDs. A key context can then
+/// compact the deterministic union of graph, selector, and permutation sources
+/// without losing information or changing the existing CUDA source order.
+#[derive(Default)]
+struct ResidentGraphSourceBounds {
+    fixed: u32,
+    advice: u32,
+    instance: u32,
+    challenges: u32,
+}
+
+#[cfg(feature = "gpu-resident")]
+impl ResidentGraphSourceBounds {
+    fn note(
+        bound: &mut u32,
+        kind: GraphValueKind,
+        index: u32,
+    ) -> Result<(), ResidentGraphCompileError> {
+        let count = index
+            .checked_add(1)
+            .ok_or(ResidentGraphCompileError::SourceCountOverflow { kind, index })?;
+        *bound = (*bound).max(count);
+        Ok(())
+    }
+
+    fn finish(self) -> GraphSourceCounts {
+        GraphSourceCounts::new(self.fixed, self.advice, self.instance, self.challenges)
+    }
+}
+
+#[cfg(feature = "gpu-resident")]
+fn abi_index(role: &'static str, index: usize) -> Result<u32, ResidentGraphCompileError> {
+    u32::try_from(index).map_err(|_| ResidentGraphCompileError::AbiIndexOverflow { role, index })
+}
+
+#[cfg(feature = "gpu-resident")]
+fn compile_source(
+    source: &ValueSource,
+    intermediate_slots: &[u32],
+    bounds: &mut ResidentGraphSourceBounds,
+    calculation: usize,
+) -> Result<GraphValueRef, ResidentGraphCompileError> {
+    let (kind, a, b) = match source {
+        ValueSource::Constant(index) => {
+            (GraphValueKind::Constant, abi_index("constant", *index)?, 0)
+        }
+        ValueSource::Intermediate(index) => (
+            GraphValueKind::Intermediate,
+            *intermediate_slots.get(*index).ok_or(
+                ResidentGraphCompileError::IntermediateSourceOutOfBounds {
+                    calculation,
+                    intermediate: *index,
+                    limit: intermediate_slots.len(),
+                },
+            )?,
+            0,
+        ),
+        ValueSource::Fixed(column, rotation) => {
+            let column = abi_index("fixed column", *column)?;
+            ResidentGraphSourceBounds::note(&mut bounds.fixed, GraphValueKind::Fixed, column)?;
+            (
+                GraphValueKind::Fixed,
+                column,
+                abi_index("rotation", *rotation)?,
+            )
+        }
+        ValueSource::Advice(column, rotation) => {
+            let column = abi_index("advice column", *column)?;
+            ResidentGraphSourceBounds::note(&mut bounds.advice, GraphValueKind::Advice, column)?;
+            (
+                GraphValueKind::Advice,
+                column,
+                abi_index("rotation", *rotation)?,
+            )
+        }
+        ValueSource::Instance(column, rotation) => {
+            let column = abi_index("instance column", *column)?;
+            ResidentGraphSourceBounds::note(
+                &mut bounds.instance,
+                GraphValueKind::Instance,
+                column,
+            )?;
+            (
+                GraphValueKind::Instance,
+                column,
+                abi_index("rotation", *rotation)?,
+            )
+        }
+        ValueSource::Challenge(index) => {
+            let index = abi_index("challenge", *index)?;
+            ResidentGraphSourceBounds::note(
+                &mut bounds.challenges,
+                GraphValueKind::Challenge,
+                index,
+            )?;
+            (GraphValueKind::Challenge, index, 0)
+        }
+        ValueSource::Beta() => (GraphValueKind::Beta, 0, 0),
+        ValueSource::Gamma() => (GraphValueKind::Gamma, 0, 0),
+        ValueSource::Theta() => (GraphValueKind::Theta, 0, 0),
+        ValueSource::TrashChallenge() => (GraphValueKind::TrashChallenge, 0, 0),
+        ValueSource::Y() => (GraphValueKind::Y, 0, 0),
+        ValueSource::PreviousValue() => (GraphValueKind::PreviousValue, 0, 0),
+    };
+    Ok(GraphValueRef::new(kind, a, b))
+}
+
+#[cfg(feature = "gpu-resident")]
+#[allow(unsafe_code)]
+pub(super) fn checked_raw_fr<F: PrimeField + 'static>(
+    value: F,
+) -> Result<RawFr, ResidentGraphCompileError> {
+    if TypeId::of::<F>() != TypeId::of::<midnight_curves::Fq>() {
+        return Err(ResidentGraphCompileError::UnsupportedField);
+    }
+    if std::mem::size_of::<F>() != std::mem::size_of::<RawFr>()
+        || std::mem::align_of::<F>() != std::mem::align_of::<RawFr>()
+    {
+        return Err(ResidentGraphCompileError::FieldLayoutMismatch {
+            field_size: std::mem::size_of::<F>(),
+            field_alignment: std::mem::align_of::<F>(),
+        });
+    }
+
+    // TypeId and the layout checks above establish the documented transparent
+    // BLS12-381 Fq -> Montgomery-limb ABI before this representation copy.
+    Ok(unsafe { std::mem::transmute_copy(&value) })
+}
+
+#[cfg(feature = "gpu-resident")]
+#[allow(dead_code)]
+pub(crate) fn compile_resident_graph<F: PrimeField + 'static>(
+    graph: &GraphEvaluator<F>,
+) -> Result<CompiledGraph, ResidentGraphCompileError> {
+    if TypeId::of::<F>() != TypeId::of::<midnight_curves::Fq>() {
+        return Err(ResidentGraphCompileError::UnsupportedField);
+    }
+
+    let slot_plan = intermediate_slot_plan(graph)?;
+    let constants = graph
+        .constants
+        .iter()
+        .copied()
+        .map(checked_raw_fr)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut bounds = ResidentGraphSourceBounds::default();
+    let mut horner_parts = Vec::new();
+    let mut operations = Vec::with_capacity(graph.calculations.len());
+
+    for (calculation_index, calculation) in graph.calculations.iter().enumerate() {
+        let target = *slot_plan.slots.get(calculation.target).ok_or(
+            ResidentGraphCompileError::TargetOutOfBounds {
+                calculation: calculation_index,
+                target: calculation.target,
+                limit: slot_plan.slots.len(),
+            },
+        )?;
+        let (opcode, lhs, rhs, parts_offset, parts_len) = match &calculation.calculation {
+            Calculation::Add(lhs, rhs) => (
+                GraphOpcode::Add,
+                compile_source(lhs, &slot_plan.slots, &mut bounds, calculation_index)?,
+                compile_source(rhs, &slot_plan.slots, &mut bounds, calculation_index)?,
+                0,
+                0,
+            ),
+            Calculation::Sub(lhs, rhs) => (
+                GraphOpcode::Sub,
+                compile_source(lhs, &slot_plan.slots, &mut bounds, calculation_index)?,
+                compile_source(rhs, &slot_plan.slots, &mut bounds, calculation_index)?,
+                0,
+                0,
+            ),
+            Calculation::Mul(lhs, rhs) => (
+                GraphOpcode::Mul,
+                compile_source(lhs, &slot_plan.slots, &mut bounds, calculation_index)?,
+                compile_source(rhs, &slot_plan.slots, &mut bounds, calculation_index)?,
+                0,
+                0,
+            ),
+            Calculation::Square(source) => (
+                GraphOpcode::Square,
+                compile_source(source, &slot_plan.slots, &mut bounds, calculation_index)?,
+                GraphValueRef::default(),
+                0,
+                0,
+            ),
+            Calculation::Double(source) => (
+                GraphOpcode::Double,
+                compile_source(source, &slot_plan.slots, &mut bounds, calculation_index)?,
+                GraphValueRef::default(),
+                0,
+                0,
+            ),
+            Calculation::Negate(source) => (
+                GraphOpcode::Negate,
+                compile_source(source, &slot_plan.slots, &mut bounds, calculation_index)?,
+                GraphValueRef::default(),
+                0,
+                0,
+            ),
+            Calculation::Horner(start, parts, factor) => {
+                let parts_offset = abi_index("Horner part offset", horner_parts.len())?;
+                let parts_len = abi_index("Horner part count", parts.len())?;
+                if parts_offset.checked_add(parts_len).is_none() {
+                    return Err(ResidentGraphCompileError::HornerRangeOverflow {
+                        calculation: calculation_index,
+                        offset: parts_offset,
+                        len: parts_len,
+                    });
+                }
+                for part in parts {
+                    horner_parts.push(compile_source(
+                        part,
+                        &slot_plan.slots,
+                        &mut bounds,
+                        calculation_index,
+                    )?);
+                }
+                (
+                    GraphOpcode::Horner,
+                    compile_source(start, &slot_plan.slots, &mut bounds, calculation_index)?,
+                    compile_source(factor, &slot_plan.slots, &mut bounds, calculation_index)?,
+                    parts_offset,
+                    parts_len,
+                )
+            }
+            Calculation::Store(source) => (
+                GraphOpcode::Store,
+                compile_source(source, &slot_plan.slots, &mut bounds, calculation_index)?,
+                GraphValueRef::default(),
+                0,
+                0,
+            ),
+        };
+        operations.push(GraphOp::new(
+            opcode,
+            target,
+            parts_offset,
+            parts_len,
+            lhs,
+            rhs,
+        ));
+    }
+
+    let compiled = CompiledGraph::try_new(
+        constants.into_boxed_slice(),
+        graph.rotations.clone().into_boxed_slice(),
+        operations.into_boxed_slice(),
+        horner_parts.into_boxed_slice(),
+        bounds.finish(),
+    )?;
+    debug_assert_eq!(compiled.required_scratch_slots(), slot_plan.capacity);
+    Ok(compiled)
+}
+
+/// Lowers and packs graphs in their supplied protocol order.
+#[cfg(feature = "gpu-resident")]
+#[allow(dead_code)]
+pub(crate) fn compile_resident_graph_family<F: PrimeField + 'static>(
+    graphs: &[GraphEvaluator<F>],
+) -> Result<CompiledGraphFamily, ResidentGraphFamilyCompileError> {
+    compile_resident_graph_family_with_required_columns(graphs, GraphColumnRequirements::default())
+}
+
+/// Lowers and packs graphs with columns used by non-graph resident phases.
+#[cfg(feature = "gpu-resident")]
+#[allow(dead_code)]
+pub(crate) fn compile_resident_graph_family_with_required_columns<F: PrimeField + 'static>(
+    graphs: &[GraphEvaluator<F>],
+    required: GraphColumnRequirements<'_>,
+) -> Result<CompiledGraphFamily, ResidentGraphFamilyCompileError> {
+    let compiled = graphs
+        .iter()
+        .enumerate()
+        .map(|(graph_index, graph)| {
+            compile_resident_graph(graph).map_err(|source| ResidentGraphFamilyCompileError::Graph {
+                graph_index,
+                source,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    CompiledGraphFamily::try_new_with_required_columns(compiled.into_boxed_slice(), required)
+        .map_err(ResidentGraphFamilyCompileError::Family)
+}
+
+/// Lowers an evaluator while deriving graph order and section boundaries from
+/// its protocol-classified fields.
+#[cfg(feature = "gpu-resident")]
+#[allow(dead_code)]
+pub(crate) fn compile_resident_protocol_graph_family<F: PrimeField + 'static>(
+    evaluator: &Evaluator<F>,
+) -> Result<CompiledProtocolGraphFamily, ResidentGraphFamilyCompileError> {
+    compile_resident_protocol_graph_family_with_required_columns(
+        evaluator,
+        GraphColumnRequirements::default(),
+    )
+}
+
+/// Lowers a classified evaluator together with non-graph column requirements.
+#[cfg(feature = "gpu-resident")]
+#[allow(dead_code)]
+pub(crate) fn compile_resident_protocol_graph_family_with_required_columns<
+    F: PrimeField + 'static,
+>(
+    evaluator: &Evaluator<F>,
+    required: GraphColumnRequirements<'_>,
+) -> Result<CompiledProtocolGraphFamily, ResidentGraphFamilyCompileError> {
+    let lookup_counts = (
+        evaluator.lookups.len(),
+        evaluator.lookup_inputs.len(),
+        evaluator.lookup_tables.len(),
+    );
+    if lookup_counts.0 != lookup_counts.1 || lookup_counts.0 != lookup_counts.2 {
+        return Err(ResidentGraphFamilyCompileError::Family(
+            GraphFamilyValidationError::LookupSectionCountMismatch {
+                lookups: lookup_counts.0,
+                lookup_inputs: lookup_counts.1,
+                lookup_tables: lookup_counts.2,
+            },
+        ));
+    }
+
+    let total = 1usize
+        .checked_add(evaluator.lookups.len())
+        .and_then(|count| count.checked_add(evaluator.lookup_inputs.len()))
+        .and_then(|count| count.checked_add(evaluator.lookup_tables.len()))
+        .and_then(|count| count.checked_add(evaluator.trashcans.len()))
+        .ok_or_else(|| {
+            ResidentGraphFamilyCompileError::Family(
+                GraphFamilyValidationError::ArrayLengthExceedsAbi {
+                    array: "graphs",
+                    len: usize::MAX,
+                },
+            )
+        })?;
+    if u32::try_from(total).is_err() {
+        return Err(ResidentGraphFamilyCompileError::Family(
+            GraphFamilyValidationError::ArrayLengthExceedsAbi {
+                array: "graphs",
+                len: total,
+            },
+        ));
+    }
+
+    let custom = Some(compile_resident_protocol_graph(
+        &evaluator.custom_gates,
+        ResidentGraphCategory::Custom,
+        0,
+        0,
+    )?);
+    let lookup_start = 1;
+    let lookup_input_start = lookup_start + evaluator.lookups.len();
+    let lookup_table_start = lookup_input_start + evaluator.lookup_inputs.len();
+    let trash_start = lookup_table_start + evaluator.lookup_tables.len();
+    let lookups = compile_resident_protocol_group(
+        &evaluator.lookups,
+        ResidentGraphCategory::Lookup,
+        lookup_start,
+    )?;
+    let lookup_inputs = compile_resident_protocol_group(
+        &evaluator.lookup_inputs,
+        ResidentGraphCategory::LookupInput,
+        lookup_input_start,
+    )?;
+    let lookup_tables = compile_resident_protocol_group(
+        &evaluator.lookup_tables,
+        ResidentGraphCategory::LookupTable,
+        lookup_table_start,
+    )?;
+    let trash = compile_resident_protocol_group(
+        &evaluator.trashcans,
+        ResidentGraphCategory::Trash,
+        trash_start,
+    )?;
+
+    CompiledProtocolGraphFamily::try_new_with_required_columns(
+        custom,
+        lookups,
+        lookup_inputs,
+        lookup_tables,
+        trash,
+        required,
+    )
+    .map_err(ResidentGraphFamilyCompileError::Family)
+}
+
+#[cfg(feature = "gpu-resident")]
+fn compile_resident_protocol_group<F: PrimeField + 'static>(
+    graphs: &[GraphEvaluator<F>],
+    category: ResidentGraphCategory,
+    start: usize,
+) -> Result<Box<[CompiledGraph]>, ResidentGraphFamilyCompileError> {
+    graphs
+        .iter()
+        .enumerate()
+        .map(|(category_index, graph)| {
+            compile_resident_protocol_graph(graph, category, category_index, start + category_index)
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Vec::into_boxed_slice)
+}
+
+#[cfg(feature = "gpu-resident")]
+fn compile_resident_protocol_graph<F: PrimeField + 'static>(
+    graph: &GraphEvaluator<F>,
+    category: ResidentGraphCategory,
+    category_index: usize,
+    graph_index: usize,
+) -> Result<CompiledGraph, ResidentGraphFamilyCompileError> {
+    compile_resident_graph(graph).map_err(|source| ResidentGraphFamilyCompileError::ProtocolGraph {
+        category,
+        category_index,
+        graph_index,
+        source,
+    })
+}
+
+#[cfg(feature = "gpu-resident-graph-test-support")]
+pub(super) fn resident_graph_compiler_regression() -> Result<(), String> {
+    let graph = GraphEvaluator {
+        constants: vec![midnight_curves::Fq::from(7)],
+        rotations: vec![-3, 1],
+        calculations: vec![
+            CalculationInfo {
+                calculation: Calculation::Store(ValueSource::Constant(0)),
+                target: 0,
+            },
+            CalculationInfo {
+                calculation: Calculation::Add(
+                    ValueSource::Intermediate(0),
+                    ValueSource::Fixed(4, 1),
+                ),
+                target: 1,
+            },
+            CalculationInfo {
+                calculation: Calculation::Horner(
+                    ValueSource::Intermediate(1),
+                    vec![
+                        ValueSource::Advice(2, 0),
+                        ValueSource::Instance(7, 1),
+                        ValueSource::Challenge(3),
+                    ],
+                    ValueSource::Y(),
+                ),
+                target: 2,
+            },
+        ],
+        num_intermediates: 3,
+    };
+    let compiled = compile_resident_graph(&graph).map_err(|error| error.to_string())?;
+    let expected_operations = [
+        GraphOp::new(
+            GraphOpcode::Store,
+            0,
+            0,
+            0,
+            GraphValueRef::new(GraphValueKind::Constant, 0, 0),
+            GraphValueRef::default(),
+        ),
+        GraphOp::new(
+            GraphOpcode::Add,
+            0,
+            0,
+            0,
+            GraphValueRef::new(GraphValueKind::Intermediate, 0, 0),
+            GraphValueRef::new(GraphValueKind::Fixed, 4, 1),
+        ),
+        GraphOp::new(
+            GraphOpcode::Horner,
+            0,
+            0,
+            3,
+            GraphValueRef::new(GraphValueKind::Intermediate, 0, 0),
+            GraphValueRef::new(GraphValueKind::Y, 0, 0),
+        ),
+    ];
+    let expected_parts = [
+        GraphValueRef::new(GraphValueKind::Advice, 2, 0),
+        GraphValueRef::new(GraphValueKind::Instance, 7, 1),
+        GraphValueRef::new(GraphValueKind::Challenge, 3, 0),
+    ];
+    if compiled.constants().len() != 1
+        || compiled.rotations() != [-3, 1]
+        || compiled.operations() != expected_operations
+        || compiled.horner_parts() != expected_parts
+        || compiled.source_counts() != GraphSourceCounts::new(5, 3, 8, 4)
+        || compiled.required_scratch_slots() != 1
+        || compiled.result_slot() != Some(0)
+    {
+        return Err("neutral graph arrays differ from the checked ABI snapshot".to_string());
+    }
+
+    let second_graph = GraphEvaluator {
+        constants: vec![midnight_curves::Fq::from(11)],
+        rotations: vec![5],
+        calculations: vec![
+            CalculationInfo {
+                calculation: Calculation::Store(ValueSource::Constant(0)),
+                target: 0,
+            },
+            CalculationInfo {
+                calculation: Calculation::Horner(
+                    ValueSource::Intermediate(0),
+                    vec![
+                        ValueSource::Fixed(11, 0),
+                        ValueSource::Fixed(4, 0),
+                        ValueSource::Advice(2, 0),
+                        ValueSource::Instance(3, 0),
+                        ValueSource::Challenge(1),
+                    ],
+                    ValueSource::Y(),
+                ),
+                target: 1,
+            },
+        ],
+        num_intermediates: 2,
+    };
+    let second_compiled =
+        compile_resident_graph(&second_graph).map_err(|error| error.to_string())?;
+    let ordered_graphs = [graph.clone(), second_graph.clone()];
+    let family =
+        compile_resident_graph_family(&ordered_graphs).map_err(|error| error.to_string())?;
+    let descriptor_words = family
+        .descriptors()
+        .iter()
+        .map(|descriptor| {
+            [
+                descriptor.constants_offset(),
+                descriptor.constants_count(),
+                descriptor.rotations_offset(),
+                descriptor.rotations_count(),
+                descriptor.operations_offset(),
+                descriptor.operations_count(),
+                descriptor.parts_offset(),
+                descriptor.parts_count(),
+                descriptor.scratch_class().capacity(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    if family.fixed_compact_to_logical() != [4, 11]
+        || family.advice_compact_to_logical() != [2]
+        || family.instance_compact_to_logical() != [3, 7]
+        || family.challenge_bound() != 4
+        || descriptor_words != [[0, 1, 0, 2, 0, 3, 0, 3, 8], [1, 1, 2, 1, 3, 2, 3, 5, 8]]
+        || family.constants() != [compiled.constants()[0], second_compiled.constants()[0]]
+        || family.rotations() != [-3, 1, 5]
+    {
+        return Err(
+            "neutral graph family packing differs from the checked ABI snapshot".to_string(),
+        );
+    }
+
+    let expected_family_parts = [
+        GraphValueRef::new(GraphValueKind::Advice, 0, 0),
+        GraphValueRef::new(GraphValueKind::Instance, 1, 1),
+        GraphValueRef::new(GraphValueKind::Challenge, 3, 0),
+        GraphValueRef::new(GraphValueKind::Fixed, 1, 0),
+        GraphValueRef::new(GraphValueKind::Fixed, 0, 0),
+        GraphValueRef::new(GraphValueKind::Advice, 0, 0),
+        GraphValueRef::new(GraphValueKind::Instance, 0, 0),
+        GraphValueRef::new(GraphValueKind::Challenge, 1, 0),
+    ];
+    if family.horner_parts() != expected_family_parts
+        || family.operations()[1].rhs != GraphValueRef::new(GraphValueKind::Fixed, 0, 1)
+    {
+        return Err("cross-graph column compaction changed a source or its rotation".to_string());
+    }
+
+    let same_family =
+        compile_resident_graph_family(&ordered_graphs).map_err(|error| error.to_string())?;
+    let reversed_graphs = [second_graph.clone(), graph.clone()];
+    let reversed_family =
+        compile_resident_graph_family(&reversed_graphs).map_err(|error| error.to_string())?;
+    if family.fingerprint() != same_family.fingerprint()
+        || family.fingerprint() == reversed_family.fingerprint()
+        || reversed_family.rotations() != [5, -3, 1]
+    {
+        return Err("graph family fingerprint did not preserve protocol order".to_string());
+    }
+
+    let required_fixed = [8, 4];
+    let required_advice = [9];
+    let required_instance = [6];
+    let required_family = compile_resident_graph_family_with_required_columns(
+        &ordered_graphs,
+        GraphColumnRequirements::new(&required_fixed, &required_advice, &required_instance),
+    )
+    .map_err(|error| error.to_string())?;
+    if required_family.fixed_compact_to_logical() != [4, 8, 11]
+        || required_family.advice_compact_to_logical() != [2, 9]
+        || required_family.instance_compact_to_logical() != [3, 6, 7]
+        || required_family.fingerprint() == family.fingerprint()
+    {
+        return Err("non-graph column requirements were absent from family compaction".to_string());
+    }
+
+    let protocol_evaluator = Evaluator {
+        custom_gates: graph.clone(),
+        lookups: vec![second_graph.clone()],
+        lookup_inputs: vec![graph.clone()],
+        lookup_tables: vec![second_graph.clone()],
+        trashcans: vec![graph.clone()],
+    };
+    let protocol_family = compile_resident_protocol_graph_family(&protocol_evaluator)
+        .map_err(|error| error.to_string())?;
+    let sections = protocol_family.sections();
+    if sections.custom() != 1
+        || sections.lookups() != 1
+        || sections.lookup_inputs() != 1
+        || sections.lookup_tables() != 1
+        || sections.trash() != 1
+        || protocol_family.packed().descriptors().len() != 5
+        || protocol_family.packed().constants()
+            != [
+                compiled.constants()[0],
+                second_compiled.constants()[0],
+                compiled.constants()[0],
+                second_compiled.constants()[0],
+                compiled.constants()[0],
+            ]
+    {
+        return Err(
+            "protocol graph sections were not derived from evaluator categories".to_string(),
+        );
+    }
+
+    let duplicate = GraphEvaluator {
+        constants: vec![midnight_curves::Fq::ZERO],
+        rotations: Vec::new(),
+        calculations: vec![
+            CalculationInfo {
+                calculation: Calculation::Store(ValueSource::Constant(0)),
+                target: 0,
+            },
+            CalculationInfo {
+                calculation: Calculation::Store(ValueSource::Constant(0)),
+                target: 0,
+            },
+        ],
+        num_intermediates: 2,
+    };
+    if !matches!(
+        compile_resident_graph(&duplicate),
+        Err(ResidentGraphCompileError::DuplicateTarget {
+            calculation: 1,
+            target: 0,
+        })
+    ) {
+        return Err("duplicate logical target was accepted".to_string());
+    }
+    let family_with_invalid_second = [graph.clone(), duplicate.clone()];
+    if !matches!(
+        compile_resident_graph_family(&family_with_invalid_second),
+        Err(ResidentGraphFamilyCompileError::Graph {
+            graph_index: 1,
+            source: ResidentGraphCompileError::DuplicateTarget {
+                calculation: 1,
+                target: 0,
+            },
+        })
+    ) {
+        return Err("graph family compilation did not report the failing graph index".to_string());
+    }
+    let invalid_protocol_evaluator = Evaluator {
+        custom_gates: graph.clone(),
+        lookups: vec![graph.clone()],
+        lookup_inputs: vec![duplicate],
+        lookup_tables: vec![graph.clone()],
+        trashcans: Vec::new(),
+    };
+    if !matches!(
+        compile_resident_protocol_graph_family(&invalid_protocol_evaluator),
+        Err(ResidentGraphFamilyCompileError::ProtocolGraph {
+            category: ResidentGraphCategory::LookupInput,
+            category_index: 0,
+            graph_index: 2,
+            source: ResidentGraphCompileError::DuplicateTarget {
+                calculation: 1,
+                target: 0,
+            },
+        })
+    ) {
+        return Err("protocol graph failure lost its category or packed index".to_string());
+    }
+
+    let missing = GraphEvaluator {
+        constants: vec![midnight_curves::Fq::ZERO],
+        rotations: Vec::new(),
+        calculations: vec![CalculationInfo {
+            calculation: Calculation::Store(ValueSource::Constant(0)),
+            target: 0,
+        }],
+        num_intermediates: 2,
+    };
+    if compile_resident_graph(&missing)
+        != Err(ResidentGraphCompileError::MissingTarget { target: 1 })
+    {
+        return Err("missing logical target was accepted".to_string());
+    }
+
+    let forward = GraphEvaluator {
+        constants: vec![midnight_curves::Fq::ZERO],
+        rotations: Vec::new(),
+        calculations: vec![
+            CalculationInfo {
+                calculation: Calculation::Store(ValueSource::Intermediate(1)),
+                target: 0,
+            },
+            CalculationInfo {
+                calculation: Calculation::Store(ValueSource::Constant(0)),
+                target: 1,
+            },
+        ],
+        num_intermediates: 2,
+    };
+    if compile_resident_graph(&forward)
+        != Err(ResidentGraphCompileError::IntermediateReadBeforeWrite {
+            calculation: 0,
+            intermediate: 1,
+        })
+    {
+        return Err("forward logical read was accepted".to_string());
+    }
+
+    let wrong_field = GraphEvaluator::<midnight_curves::Fp> {
+        constants: vec![midnight_curves::Fp::ZERO],
+        rotations: Vec::new(),
+        calculations: Vec::new(),
+        num_intermediates: 0,
+    };
+    if compile_resident_graph(&wrong_field) != Err(ResidentGraphCompileError::UnsupportedField) {
+        return Err("non-BLS12-381 scalar layout was accepted".to_string());
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "gpu-blitzar")]
+struct SpparkGraphBuffers {
+    constants: Vec<Bls12_381Fr>,
+    rotations: Vec<i32>,
+    calculations: Vec<RawCalculation>,
+    horner_parts: Vec<RawValueSource>,
+    num_intermediates: u32,
+}
+
 #[cfg(feature = "gpu-blitzar")]
 impl SpparkGraphBuffers {
-    fn from_graph<F: PrimeField>(graph: &GraphEvaluator<F>) -> Option<Self> {
-        let slot_plan = intermediate_slot_plan(graph)?;
-        if slot_plan.capacity as usize > SPPARK_MAX_GRAPH_INTERMEDIATES {
-            return None;
+    fn from_graph<F: PrimeField + 'static>(graph: &GraphEvaluator<F>) -> Option<Self> {
+        compile_resident_graph(graph).ok().map(Self::from_compiled)
+    }
+
+    fn from_compiled(graph: CompiledGraph) -> Self {
+        Self {
+            constants: graph
+                .constants()
+                .iter()
+                .map(|value| Bls12_381Fr { limbs: value.limbs })
+                .collect(),
+            rotations: graph.rotations().to_vec(),
+            calculations: graph
+                .operations()
+                .iter()
+                .map(|operation| RawCalculation {
+                    op: operation.opcode,
+                    target: operation.target,
+                    parts_offset: operation.parts_offset,
+                    parts_len: operation.parts_len,
+                    lhs: sppark_source(operation.lhs),
+                    rhs: sppark_source(operation.rhs),
+                })
+                .collect(),
+            horner_parts: graph
+                .horner_parts()
+                .iter()
+                .copied()
+                .map(sppark_source)
+                .collect(),
+            num_intermediates: graph.required_scratch_slots(),
         }
-
-        let constants = graph
-            .constants
-            .iter()
-            .copied()
-            .map(raw_from_field)
-            .collect::<Vec<_>>();
-        let rotations = graph.rotations.clone();
-        let mut horner_parts = Vec::new();
-        let mut calculations = Vec::with_capacity(graph.calculations.len());
-
-        for calc in &graph.calculations {
-            let (op, lhs, rhs, parts_offset, parts_len) = match &calc.calculation {
-                Calculation::Add(a, b) => (
-                    0,
-                    raw_source(a, &slot_plan.slots)?,
-                    raw_source(b, &slot_plan.slots)?,
-                    0,
-                    0,
-                ),
-                Calculation::Sub(a, b) => (
-                    1,
-                    raw_source(a, &slot_plan.slots)?,
-                    raw_source(b, &slot_plan.slots)?,
-                    0,
-                    0,
-                ),
-                Calculation::Mul(a, b) => (
-                    2,
-                    raw_source(a, &slot_plan.slots)?,
-                    raw_source(b, &slot_plan.slots)?,
-                    0,
-                    0,
-                ),
-                Calculation::Square(a) => (
-                    3,
-                    raw_source(a, &slot_plan.slots)?,
-                    RawValueSource::default(),
-                    0,
-                    0,
-                ),
-                Calculation::Double(a) => (
-                    4,
-                    raw_source(a, &slot_plan.slots)?,
-                    RawValueSource::default(),
-                    0,
-                    0,
-                ),
-                Calculation::Negate(a) => (
-                    5,
-                    raw_source(a, &slot_plan.slots)?,
-                    RawValueSource::default(),
-                    0,
-                    0,
-                ),
-                Calculation::Horner(start, parts, factor) => {
-                    let parts_offset = u32::try_from(horner_parts.len()).ok()?;
-                    for part in parts {
-                        horner_parts.push(raw_source(part, &slot_plan.slots)?);
-                    }
-                    (
-                        6,
-                        raw_source(start, &slot_plan.slots)?,
-                        raw_source(factor, &slot_plan.slots)?,
-                        parts_offset,
-                        u32::try_from(parts.len()).ok()?,
-                    )
-                }
-                Calculation::Store(a) => (
-                    7,
-                    raw_source(a, &slot_plan.slots)?,
-                    RawValueSource::default(),
-                    0,
-                    0,
-                ),
-            };
-            calculations.push(RawCalculation {
-                op,
-                target: *slot_plan.slots.get(calc.target)?,
-                parts_offset,
-                parts_len,
-                lhs,
-                rhs,
-            });
-        }
-
-        Some(Self {
-            constants,
-            rotations,
-            calculations,
-            horner_parts,
-            num_intermediates: slot_plan.capacity,
-        })
     }
 
     fn as_raw(&self) -> RawGraph {
@@ -468,7 +1342,13 @@ impl SpparkGraphBuffers {
 }
 
 #[cfg(feature = "gpu-blitzar")]
-const SPPARK_MAX_GRAPH_INTERMEDIATES: usize = 256;
+fn sppark_source(source: GraphValueRef) -> RawValueSource {
+    RawValueSource {
+        kind: source.kind,
+        a: source.a,
+        b: source.b,
+    }
+}
 
 #[cfg(feature = "gpu-blitzar")]
 pub(super) fn sppark_resident_evaluator_supported<F: PrimeField>(evaluator: &Evaluator<F>) -> bool {
@@ -478,77 +1358,8 @@ pub(super) fn sppark_resident_evaluator_supported<F: PrimeField>(evaluator: &Eva
         .chain(&evaluator.lookup_tables)
         .chain(&evaluator.trashcans)
         .all(|graph| {
-            intermediate_slot_plan(graph)
-                .map(|plan| plan.capacity as usize <= SPPARK_MAX_GRAPH_INTERMEDIATES)
-                .unwrap_or(false)
+            intermediate_slot_plan(graph).is_ok_and(|plan| plan.capacity <= MAX_GRAPH_SCRATCH_SLOTS)
         })
-}
-
-#[cfg(feature = "gpu-blitzar")]
-fn raw_source(source: &ValueSource, intermediate_slots: &[u32]) -> Option<RawValueSource> {
-    let raw = match source {
-        ValueSource::Constant(idx) => RawValueSource {
-            kind: 0,
-            a: u32::try_from(*idx).ok()?,
-            b: 0,
-        },
-        ValueSource::Intermediate(idx) => RawValueSource {
-            kind: 1,
-            a: *intermediate_slots.get(*idx)?,
-            b: 0,
-        },
-        ValueSource::Fixed(column, rotation) => RawValueSource {
-            kind: 2,
-            a: u32::try_from(*column).ok()?,
-            b: u32::try_from(*rotation).ok()?,
-        },
-        ValueSource::Advice(column, rotation) => RawValueSource {
-            kind: 3,
-            a: u32::try_from(*column).ok()?,
-            b: u32::try_from(*rotation).ok()?,
-        },
-        ValueSource::Instance(column, rotation) => RawValueSource {
-            kind: 4,
-            a: u32::try_from(*column).ok()?,
-            b: u32::try_from(*rotation).ok()?,
-        },
-        ValueSource::Challenge(index) => RawValueSource {
-            kind: 5,
-            a: u32::try_from(*index).ok()?,
-            b: 0,
-        },
-        ValueSource::Beta() => RawValueSource {
-            kind: 6,
-            a: 0,
-            b: 0,
-        },
-        ValueSource::Gamma() => RawValueSource {
-            kind: 7,
-            a: 0,
-            b: 0,
-        },
-        ValueSource::Theta() => RawValueSource {
-            kind: 8,
-            a: 0,
-            b: 0,
-        },
-        ValueSource::TrashChallenge() => RawValueSource {
-            kind: 9,
-            a: 0,
-            b: 0,
-        },
-        ValueSource::Y() => RawValueSource {
-            kind: 10,
-            a: 0,
-            b: 0,
-        },
-        ValueSource::PreviousValue() => RawValueSource {
-            kind: 11,
-            a: 0,
-            b: 0,
-        },
-    };
-    Some(raw)
 }
 
 #[cfg(feature = "gpu-blitzar")]
@@ -1375,11 +2186,10 @@ impl SpparkResidentNumeratorContext {
 
         let mut fallback_numerator_for_debug = None;
         if argument_residency.starts_with("debug") {
-            let check_resident = |
-                label: &str,
-                resident: &Bls12_381FrDeviceVec,
-                expected: Vec<Bls12_381Fr>,
-            | -> Result<(), String> {
+            let check_resident = |label: &str,
+                                  resident: &Bls12_381FrDeviceVec,
+                                  expected: Vec<Bls12_381Fr>|
+             -> Result<(), String> {
                 let actual = resident.download().map_err(|error| error.to_string())?;
                 if actual == expected {
                     return Ok(());
@@ -1389,7 +2199,9 @@ impl SpparkResidentNumeratorContext {
                     .zip(&expected)
                     .position(|(actual, expected)| actual != expected)
                     .unwrap_or(actual.len().min(expected.len()));
-                Err(format!("resident {label} coefficient mismatch at {mismatch}"))
+                Err(format!(
+                    "resident {label} coefficient mismatch at {mismatch}"
+                ))
             };
             if let Some(resident) = resident_advice {
                 check_resident(
@@ -2227,7 +3039,7 @@ impl<F: WithSmallOrderMulGroup<3>> Evaluator<F> {
             },
             Some(size),
         );
-        midnight_sppark_msm::bls12_381_eval_numerator(
+        if midnight_sppark_msm::bls12_381_eval_numerator(
             &mut out,
             initial_raw.as_deref(),
             &fixed_flat,
@@ -2284,7 +3096,11 @@ impl<F: WithSmallOrderMulGroup<3>> Evaluator<F> {
             &lookup_raw,
             &trash_raw,
         )
-        .ok()?;
+        .is_err()
+        {
+            midnight_sppark_msm::record_accelerator_fallback();
+            return None;
+        }
 
         Some(Polynomial {
             values: out.into_iter().map(field_from_raw).collect(),
@@ -3069,8 +3885,35 @@ pub fn evaluate<F: Field, B: PolynomialRepresentation>(
     values
 }
 
-#[cfg(all(test, feature = "gpu-blitzar"))]
-mod sppark_slot_tests {
+#[cfg(test)]
+mod rotation_tests {
+    use super::get_rotation_idx;
+
+    fn reference(idx: usize, rotation: i32, scale: i32, size: i32) -> usize {
+        ((idx as i128 + i128::from(rotation) * i128::from(scale)).rem_euclid(i128::from(size)))
+            as usize
+    }
+
+    #[test]
+    fn rotation_uses_wide_signed_arithmetic() {
+        for size in [7, 8, 1 << 15] {
+            for idx in [0, 1, (size - 1) as usize] {
+                for rotation in [i32::MIN, -3, -1, 0, 1, 3, i32::MAX] {
+                    for scale in [1, 4] {
+                        assert_eq!(
+                            get_rotation_idx(idx, rotation, scale, size),
+                            reference(idx, rotation, scale, size),
+                            "idx={idx}, rotation={rotation}, scale={scale}, size={size}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(all(test, feature = "gpu-resident"))]
+mod resident_graph_compile_tests {
     use super::*;
 
     fn graph(calculations: Vec<CalculationInfo>) -> GraphEvaluator<midnight_curves::Fq> {
@@ -3080,6 +3923,131 @@ mod sppark_slot_tests {
             num_intermediates: calculations.len(),
             calculations,
         }
+    }
+
+    fn representative_graph() -> GraphEvaluator<midnight_curves::Fq> {
+        GraphEvaluator {
+            constants: vec![midnight_curves::Fq::from(7)],
+            rotations: vec![-3, 1],
+            calculations: vec![
+                CalculationInfo {
+                    calculation: Calculation::Store(ValueSource::Constant(0)),
+                    target: 0,
+                },
+                CalculationInfo {
+                    calculation: Calculation::Add(
+                        ValueSource::Intermediate(0),
+                        ValueSource::Fixed(4, 1),
+                    ),
+                    target: 1,
+                },
+                CalculationInfo {
+                    calculation: Calculation::Horner(
+                        ValueSource::Intermediate(1),
+                        vec![
+                            ValueSource::Advice(2, 0),
+                            ValueSource::Instance(7, 1),
+                            ValueSource::Challenge(3),
+                        ],
+                        ValueSource::Y(),
+                    ),
+                    target: 2,
+                },
+            ],
+            num_intermediates: 3,
+        }
+    }
+
+    #[test]
+    fn compiler_preserves_tags_horner_order_and_logical_source_ids() {
+        let compiled =
+            compile_resident_graph(&representative_graph()).expect("representative graph");
+
+        assert_eq!(compiled.rotations(), &[-3, 1]);
+        assert_eq!(compiled.operations().len(), 3);
+        assert_eq!(compiled.operations()[0].opcode, GraphOpcode::Store as u32);
+        assert_eq!(compiled.operations()[1].opcode, GraphOpcode::Add as u32);
+        assert_eq!(compiled.operations()[2].opcode, GraphOpcode::Horner as u32);
+        assert_eq!(compiled.operations()[2].parts_offset, 0);
+        assert_eq!(compiled.operations()[2].parts_len, 3);
+        assert_eq!(compiled.operations()[2].rhs.kind, GraphValueKind::Y as u32);
+        assert_eq!(
+            compiled.horner_parts(),
+            &[
+                GraphValueRef::new(GraphValueKind::Advice, 2, 0),
+                GraphValueRef::new(GraphValueKind::Instance, 7, 1),
+                GraphValueRef::new(GraphValueKind::Challenge, 3, 0),
+            ]
+        );
+        assert_eq!(compiled.source_counts().fixed_columns(), 5);
+        assert_eq!(compiled.source_counts().advice_columns(), 3);
+        assert_eq!(compiled.source_counts().instance_columns(), 8);
+        assert_eq!(compiled.source_counts().challenges(), 4);
+        assert_eq!(compiled.required_scratch_slots(), 1);
+        assert_eq!(compiled.result_slot(), Some(0));
+    }
+
+    #[test]
+    fn compiler_rejects_duplicate_missing_and_forward_logical_targets() {
+        let duplicate = graph(vec![
+            CalculationInfo {
+                calculation: Calculation::Store(ValueSource::Constant(0)),
+                target: 0,
+            },
+            CalculationInfo {
+                calculation: Calculation::Store(ValueSource::Constant(0)),
+                target: 0,
+            },
+        ]);
+        assert!(matches!(
+            compile_resident_graph(&duplicate),
+            Err(ResidentGraphCompileError::DuplicateTarget {
+                calculation: 1,
+                target: 0
+            })
+        ));
+
+        let mut missing = graph(vec![CalculationInfo {
+            calculation: Calculation::Store(ValueSource::Constant(0)),
+            target: 0,
+        }]);
+        missing.num_intermediates = 2;
+        assert_eq!(
+            compile_resident_graph(&missing),
+            Err(ResidentGraphCompileError::MissingTarget { target: 1 })
+        );
+
+        let forward = graph(vec![
+            CalculationInfo {
+                calculation: Calculation::Store(ValueSource::Intermediate(1)),
+                target: 0,
+            },
+            CalculationInfo {
+                calculation: Calculation::Store(ValueSource::Constant(0)),
+                target: 1,
+            },
+        ]);
+        assert_eq!(
+            compile_resident_graph(&forward),
+            Err(ResidentGraphCompileError::IntermediateReadBeforeWrite {
+                calculation: 0,
+                intermediate: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn compiler_rejects_non_bls12_381_scalar_layouts() {
+        let graph = GraphEvaluator::<midnight_curves::Fp> {
+            constants: vec![midnight_curves::Fp::ZERO],
+            rotations: Vec::new(),
+            calculations: Vec::new(),
+            num_intermediates: 0,
+        };
+        assert_eq!(
+            compile_resident_graph(&graph),
+            Err(ResidentGraphCompileError::UnsupportedField)
+        );
     }
 
     #[test]
@@ -3101,7 +4069,12 @@ mod sppark_slot_tests {
         let graph = graph(calculations);
         let plan = intermediate_slot_plan(&graph).expect("chain graph should be valid");
         assert_eq!(plan.capacity, 1);
-        assert!(SpparkGraphBuffers::from_graph(&graph).is_some());
+        assert_eq!(
+            compile_resident_graph(&graph)
+                .expect("chain graph should compile")
+                .required_scratch_slots(),
+            1
+        );
     }
 
     #[test]
@@ -3130,5 +4103,42 @@ mod sppark_slot_tests {
         let plan = intermediate_slot_plan(&graph).expect("fanout graph should be valid");
         assert_eq!(plan.capacity, 2);
         assert_ne!(plan.slots[0], plan.slots[1]);
+    }
+
+    #[cfg(feature = "gpu-blitzar")]
+    #[test]
+    fn cuda_buffers_are_an_exact_view_of_the_neutral_arrays() {
+        let graph = representative_graph();
+        let compiled = compile_resident_graph(&graph).expect("representative graph");
+        let cuda = SpparkGraphBuffers::from_graph(&graph).expect("CUDA graph buffers");
+
+        assert_eq!(cuda.constants.len(), compiled.constants().len());
+        for (cuda, neutral) in cuda.constants.iter().zip(compiled.constants()) {
+            assert_eq!(cuda.limbs, neutral.limbs);
+        }
+        assert_eq!(cuda.rotations, compiled.rotations());
+        assert_eq!(cuda.calculations.len(), compiled.operations().len());
+        for (cuda, neutral) in cuda.calculations.iter().zip(compiled.operations()) {
+            assert_eq!(cuda.op, neutral.opcode);
+            assert_eq!(cuda.target, neutral.target);
+            assert_eq!(cuda.parts_offset, neutral.parts_offset);
+            assert_eq!(cuda.parts_len, neutral.parts_len);
+            assert_eq!(
+                (cuda.lhs.kind, cuda.lhs.a, cuda.lhs.b),
+                (neutral.lhs.kind, neutral.lhs.a, neutral.lhs.b,)
+            );
+            assert_eq!(
+                (cuda.rhs.kind, cuda.rhs.a, cuda.rhs.b),
+                (neutral.rhs.kind, neutral.rhs.a, neutral.rhs.b,)
+            );
+        }
+        assert_eq!(cuda.horner_parts.len(), compiled.horner_parts().len());
+        for (cuda, neutral) in cuda.horner_parts.iter().zip(compiled.horner_parts()) {
+            assert_eq!(
+                (cuda.kind, cuda.a, cuda.b),
+                (neutral.kind, neutral.a, neutral.b,)
+            );
+        }
+        assert_eq!(cuda.num_intermediates, compiled.required_scratch_slots());
     }
 }

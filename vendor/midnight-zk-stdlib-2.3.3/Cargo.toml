@@ -28,6 +28,7 @@ default = []
 heap_profiling = []
 testing = ["num-bigint/rand"]
 gpu-blitzar = ["midnight-proofs/gpu-blitzar"]
+metal-resident-quotient-diagnostic = ["midnight-proofs/metal-resident-quotient-diagnostic"]
 truncated-challenges = [
     "midnight-proofs/truncated-challenges",
     "midnight-circuits/truncated-challenges",

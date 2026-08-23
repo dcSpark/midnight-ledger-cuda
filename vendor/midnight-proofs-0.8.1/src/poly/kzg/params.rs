@@ -1,8 +1,17 @@
+#[cfg(feature = "gpu-resident")]
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, OnceLock},
+};
 use std::{fmt::Debug, io};
 
 use ff::{Field, PrimeField};
 use group::{Curve, Group, prime::PrimeCurveAffine};
 use midnight_curves::pairing::{Engine, MultiMillerLoop};
+#[cfg(feature = "gpu-resident")]
+use midnight_curves::{Bls12, G1Affine, G1Projective};
+#[cfg(feature = "gpu-resident")]
+use midnight_gpu_prover::{PreparedResidentSrs, RawG1Affine};
 use rand_core::RngCore;
 
 use crate::{
@@ -14,6 +23,16 @@ use crate::{
     },
 };
 
+#[cfg(feature = "gpu-resident")]
+type PreparedResidentSrsSlot = Arc<OnceLock<Result<Arc<PreparedResidentSrs>, String>>>;
+#[cfg(feature = "gpu-resident")]
+type PreparedResidentSrsCache = Arc<Mutex<HashMap<u32, PreparedResidentSrsSlot>>>;
+
+#[cfg(feature = "gpu-resident")]
+fn empty_prepared_resident_srs_cache() -> PreparedResidentSrsCache {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
 /// These are the public parameters for the polynomial commitment scheme.
 #[derive(Debug, Clone)]
 pub struct ParamsKZG<E: Engine> {
@@ -21,6 +40,8 @@ pub struct ParamsKZG<E: Engine> {
     pub(crate) g_lagrange: Vec<E::G1>,
     pub(crate) g2: E::G2,
     pub(crate) s_g2: E::G2,
+    #[cfg(feature = "gpu-resident")]
+    prepared_resident_srs_cache: PreparedResidentSrsCache,
 }
 
 impl<E: Engine> Params for ParamsKZG<E> {
@@ -44,6 +65,13 @@ impl<E: Engine + Debug> ParamsKZG<E> {
 
         let n = 1 << new_k;
         assert!(n < self.g_lagrange.len());
+        #[cfg(feature = "gpu-resident")]
+        {
+            // Lagrange bases are domain-specific, not prefixes of a larger
+            // domain's Lagrange basis. Detach before recomputing them so a
+            // downsized clone cannot observe entries from its source cache.
+            self.prepared_resident_srs_cache = empty_prepared_resident_srs_cache();
+        }
         self.g.truncate(n);
         self.g_lagrange = g_to_lagrange(&self.g, new_k);
     }
@@ -96,6 +124,8 @@ impl<E: Engine + Debug> ParamsKZG<E> {
             g_lagrange,
             g2,
             s_g2,
+            #[cfg(feature = "gpu-resident")]
+            prepared_resident_srs_cache: empty_prepared_resident_srs_cache(),
         }
     }
 
@@ -116,6 +146,8 @@ impl<E: Engine + Debug> ParamsKZG<E> {
             g,
             g2,
             s_g2,
+            #[cfg(feature = "gpu-resident")]
+            prepared_resident_srs_cache: empty_prepared_resident_srs_cache(),
         }
     }
 
@@ -225,8 +257,95 @@ impl<E: Engine + Debug> ParamsKZG<E> {
             g_lagrange,
             g2,
             s_g2,
+            #[cfg(feature = "gpu-resident")]
+            prepared_resident_srs_cache: empty_prepared_resident_srs_cache(),
         })
     }
+}
+
+#[cfg(feature = "gpu-resident")]
+impl ParamsKZG<Bls12> {
+    /// Returns the cached, validated coefficient SRS prefix and matching
+    /// `n`-domain Lagrange basis for `n`.
+    ///
+    /// Both successful preparations and validation failures are retained in
+    /// the per-length `OnceLock`. The mutex protects only slot lookup, so the
+    /// comparatively expensive batch normalization runs without holding the
+    /// cache-wide lock.
+    pub fn prepared_resident_srs(&self, n: u32) -> Result<Arc<PreparedResidentSrs>, String> {
+        // Reject the unbounded invalid-key space before touching the map. All
+        // remaining keys are powers of two, so the cache has at most 32 slots.
+        if !n.is_power_of_two() {
+            return Err("resident SRS length must be a nonzero power of two".to_owned());
+        }
+        let slot = {
+            let mut cache = self
+                .prepared_resident_srs_cache
+                .lock()
+                .map_err(|_| "resident SRS cache mutex is poisoned".to_owned())?;
+            Arc::clone(cache.entry(n).or_insert_with(|| Arc::new(OnceLock::new())))
+        };
+
+        slot.get_or_init(|| self.prepare_resident_srs_uncached(n))
+            .clone()
+    }
+
+    fn prepare_resident_srs_uncached(&self, n: u32) -> Result<Arc<PreparedResidentSrs>, String> {
+        let n_usize =
+            usize::try_from(n).map_err(|_| "resident SRS length does not fit usize".to_owned())?;
+        if self.g.len() < n_usize {
+            return Err(format!(
+                "coefficient SRS has length {}, but resident preparation requires {n_usize}",
+                self.g.len()
+            ));
+        }
+
+        let coefficient_points = &self.g[..n_usize];
+        let lagrange_points = g_to_lagrange(coefficient_points, n.ilog2());
+        let coefficient_bases =
+            normalize_resident_srs_prefix("coefficient SRS", coefficient_points)?;
+        let lagrange_bases = normalize_resident_srs_prefix("Lagrange SRS", &lagrange_points)?;
+
+        PreparedResidentSrs::try_new(n, coefficient_bases, lagrange_bases)
+            .map(Arc::new)
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(feature = "gpu-resident")]
+fn normalize_resident_srs_prefix(
+    label: &'static str,
+    points: &[G1Projective],
+) -> Result<Box<[RawG1Affine]>, String> {
+    use crate::utils::arithmetic::CurveAffine;
+
+    let mut affine = vec![G1Affine::identity(); points.len()];
+    G1Projective::batch_normalize(points, &mut affine);
+
+    affine
+        .iter()
+        .enumerate()
+        .map(|(index, point)| {
+            if bool::from(point.is_identity()) {
+                return Err(format!("{label} point {index} is the identity"));
+            }
+            if !bool::from(CurveAffine::is_on_curve(point)) {
+                return Err(format!("{label} point {index} is not on the curve"));
+            }
+            if !bool::from(point.is_torsion_free()) {
+                return Err(format!(
+                    "{label} point {index} is not in the prime-order subgroup"
+                ));
+            }
+
+            let raw: &blst::blst_p1_affine = point.as_ref();
+            Ok(RawG1Affine {
+                x: raw.x.l,
+                y: raw.y.l,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Vec::into_boxed_slice)
 }
 
 // TODO: see the issue at https://github.com/appliedzkp/halo2/issues/45
@@ -285,7 +404,18 @@ impl<E: MultiMillerLoop + Debug> ParamsKZG<E> {
 
 #[cfg(test)]
 mod test {
+    #[cfg(feature = "gpu-resident")]
+    use group::Group;
     use rand_core::OsRng;
+
+    #[cfg(feature = "gpu-resident")]
+    use crate::utils::arithmetic::g_to_lagrange;
+    #[cfg(feature = "gpu-resident")]
+    use midnight_curves::{Bls12, G1Affine, G1Projective};
+    #[cfg(feature = "gpu-resident")]
+    use midnight_gpu_prover::{PreparedResidentSrs, RawG1Affine};
+    #[cfg(feature = "gpu-resident")]
+    use std::sync::Arc;
 
     use crate::{
         poly::{
@@ -340,5 +470,167 @@ mod test {
         assert_eq!(params0.g_lagrange, params1.g_lagrange);
         assert_eq!(params0.g2, params1.g2);
         assert_eq!(params0.s_g2, params1.s_g2);
+    }
+
+    #[cfg(feature = "gpu-resident")]
+    fn individually_normalized_raw(points: &[G1Projective]) -> Box<[RawG1Affine]> {
+        points
+            .iter()
+            .map(|point| {
+                let affine = G1Affine::from(point);
+                let raw: &blst::blst_p1_affine = affine.as_ref();
+                RawG1Affine {
+                    x: raw.x.l,
+                    y: raw.y.l,
+                }
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
+    }
+
+    #[cfg(feature = "gpu-resident")]
+    #[test]
+    fn resident_srs_cache_reuses_the_same_arc_for_clones() {
+        let params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(4, OsRng);
+        let first = params.prepared_resident_srs(8).unwrap();
+        let second = params.prepared_resident_srs(8).unwrap();
+        let from_clone = params.clone().prepared_resident_srs(8).unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(Arc::ptr_eq(&first, &from_clone));
+    }
+
+    #[cfg(feature = "gpu-resident")]
+    #[test]
+    fn resident_srs_cache_separates_lengths_and_uses_domain_specific_lagrange_bases() {
+        let params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(4, OsRng);
+        let four = params.prepared_resident_srs(4).unwrap();
+        let eight = params.prepared_resident_srs(8).unwrap();
+        let four_domain_lagrange = g_to_lagrange(&params.g[..4], 2);
+        let eight_domain_lagrange = g_to_lagrange(&params.g[..8], 3);
+
+        assert!(!Arc::ptr_eq(&four, &eight));
+        assert_eq!(four.n(), 4);
+        assert_eq!(eight.n(), 8);
+        assert_eq!(
+            four.coefficient_bases(),
+            &*individually_normalized_raw(&params.g[..4])
+        );
+        assert_eq!(
+            eight.coefficient_bases(),
+            &*individually_normalized_raw(&params.g[..8])
+        );
+        assert_eq!(
+            four.lagrange_bases(),
+            &*individually_normalized_raw(&four_domain_lagrange)
+        );
+        assert_eq!(
+            eight.lagrange_bases(),
+            &*individually_normalized_raw(&eight_domain_lagrange)
+        );
+        assert_ne!(
+            eight.lagrange_bases(),
+            &*individually_normalized_raw(&params.g_lagrange[..8])
+        );
+
+        let independently_prepared = PreparedResidentSrs::try_new(
+            8,
+            individually_normalized_raw(&params.g[..8]),
+            individually_normalized_raw(&eight_domain_lagrange),
+        )
+        .unwrap();
+        assert_eq!(
+            eight.coefficient_digest(),
+            independently_prepared.coefficient_digest()
+        );
+        assert_eq!(
+            eight.lagrange_digest(),
+            independently_prepared.lagrange_digest()
+        );
+        assert_eq!(eight.fingerprint(), independently_prepared.fingerprint());
+    }
+
+    #[cfg(feature = "gpu-resident")]
+    #[test]
+    fn downsize_detaches_cache_before_recomputing_lagrange_bases() {
+        let params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(4, OsRng);
+        let before = params.prepared_resident_srs(8).unwrap();
+        let mut downsized = params.clone();
+
+        downsized.downsize(3);
+        let after = downsized.prepared_resident_srs(8).unwrap();
+
+        assert!(!Arc::ptr_eq(&before, &after));
+        assert_eq!(before.coefficient_digest(), after.coefficient_digest());
+        assert_eq!(before.lagrange_digest(), after.lagrange_digest());
+        assert_eq!(before.fingerprint(), after.fingerprint());
+        assert!(Arc::ptr_eq(
+            &before,
+            &params.prepared_resident_srs(8).unwrap()
+        ));
+    }
+
+    #[cfg(feature = "gpu-resident")]
+    #[test]
+    fn out_of_range_coefficient_length_is_cached_in_the_once_lock() {
+        let params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(2, OsRng);
+
+        let first = params.prepared_resident_srs(8).unwrap_err();
+        assert_eq!(
+            first,
+            "coefficient SRS has length 4, but resident preparation requires 8"
+        );
+
+        let slot = params
+            .prepared_resident_srs_cache
+            .lock()
+            .unwrap()
+            .get(&8)
+            .cloned()
+            .unwrap();
+        assert!(matches!(slot.get(), Some(Err(error)) if error == &first));
+        assert_eq!(params.prepared_resident_srs(8).unwrap_err(), first);
+    }
+
+    #[cfg(feature = "gpu-resident")]
+    #[test]
+    fn invalid_non_power_of_two_does_not_grow_the_cache() {
+        let params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(3, OsRng);
+
+        assert_eq!(
+            params.prepared_resident_srs(3).unwrap_err(),
+            "resident SRS length must be a nonzero power of two"
+        );
+        assert!(
+            params
+                .prepared_resident_srs_cache
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[cfg(feature = "gpu-resident")]
+    #[test]
+    fn resident_srs_rejects_identity_coefficient_base_before_raw_conversion() {
+        let mut params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(3, OsRng);
+        params.g[2] = G1Projective::identity();
+
+        assert_eq!(
+            params.prepared_resident_srs(4).unwrap_err(),
+            "coefficient SRS point 2 is the identity"
+        );
+    }
+
+    #[cfg(feature = "gpu-resident")]
+    #[test]
+    fn resident_srs_rejects_identity_in_derived_lagrange_basis() {
+        let mut params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(3, OsRng);
+        params.g[..4].fill(G1Projective::generator());
+
+        assert_eq!(
+            params.prepared_resident_srs(4).unwrap_err(),
+            "Lagrange SRS point 1 is the identity"
+        );
     }
 }

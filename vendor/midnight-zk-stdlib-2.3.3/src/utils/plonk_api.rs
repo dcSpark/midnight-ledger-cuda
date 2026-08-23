@@ -26,7 +26,7 @@ use std::{
 use midnight_curves::Bls12;
 use midnight_proofs::{
     plonk::{
-        Circuit, Error, ProvingKey, VerifyingKey, create_proof, keygen_pk, keygen_vk, prepare,
+        Circuit, Error, ProvingKey, VerifyingKey, keygen_pk, keygen_vk, prepare,
     },
     poly::{
         commitment::Guard,
@@ -38,6 +38,18 @@ use midnight_proofs::{
     transcript::{CircuitTranscript, Hashable, Sampleable, Transcript, TranscriptHash},
     utils::SerdeFormat,
 };
+#[cfg(not(all(
+    feature = "metal-resident-quotient-diagnostic",
+    target_os = "macos",
+    target_arch = "aarch64"
+)))]
+use midnight_proofs::plonk::create_proof;
+#[cfg(all(
+    feature = "metal-resident-quotient-diagnostic",
+    target_os = "macos",
+    target_arch = "aarch64"
+))]
+use midnight_proofs::plonk::create_proof_with_metal_quotient_diagnostic;
 use rand::{CryptoRng, RngCore};
 use sha2::Digest;
 
@@ -102,12 +114,31 @@ macro_rules! plonk_api {
                 let start = Instant::now();
                 let proof = {
                     let mut transcript = CircuitTranscript::init();
+                    #[cfg(not(all(
+                        feature = "metal-resident-quotient-diagnostic",
+                        target_os = "macos",
+                        target_arch = "aarch64"
+                    )))]
                     create_proof::<
                         $native,
                         KZGCommitmentScheme<$engine>,
                         CircuitTranscript<H>,
                         Relation,
                     >(
+                        params,
+                        pk,
+                        std::slice::from_ref(circuit),
+                        nb_instance_commitments,
+                        &[pi],
+                        &mut transcript,
+                        rng,
+                    )?;
+                    #[cfg(all(
+                        feature = "metal-resident-quotient-diagnostic",
+                        target_os = "macos",
+                        target_arch = "aarch64"
+                    ))]
+                    create_proof_with_metal_quotient_diagnostic::<H, Relation>(
                         params,
                         pk,
                         std::slice::from_ref(circuit),

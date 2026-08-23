@@ -53,6 +53,7 @@ default = []
 # Feature that exposes some testing functionality, such as load from scratch or instantiable
 testing = ["num-bigint/rand"]
 heap_profiling = []
+metal-resident-quotient-diagnostic = ["midnight-proofs/metal-resident-quotient-diagnostic"]
 # Enable truncated challenges. This makes recursive proofs more efficient
 truncated-challenges = [
     "midnight-proofs/truncated-challenges",

@@ -7,10 +7,12 @@
 //!
 //! For a more detailed explanation, see the [Halo 2 Book](https://zcash.github.io/halo2/design/proving-system/multipoint-opening.html) on Multipoint Openings.
 
-#[cfg(feature = "gpu-blitzar")]
+#[cfg(any(
+    feature = "gpu-blitzar",
+    feature = "gpu-metal",
+    feature = "metal-resident-quotient-test-support"
+))]
 use std::any::TypeId;
-#[cfg(feature = "gpu-blitzar")]
-use std::cell::RefCell;
 use std::marker::PhantomData;
 
 use midnight_curves::pairing::Engine;
@@ -21,8 +23,16 @@ pub mod gpu_blitzar;
 pub mod msm;
 /// KZG commitment scheme
 pub mod params;
+#[cfg(feature = "cuda-resident-multiopen-test-support")]
+mod resident_multiopen_test_support;
 mod utils;
 
+#[cfg(feature = "cuda-resident-multiopen-test-support")]
+#[doc(hidden)]
+pub use resident_multiopen_test_support::assert_resident_multiopen_ownership_error_isolation;
+
+#[cfg(feature = "gpu-metal")]
+use std::sync::{Mutex, OnceLock};
 use std::{fmt::Debug, hash::Hash};
 
 use ff::Field;
@@ -30,6 +40,8 @@ use group::Group;
 use midnight_curves::pairing::MultiMillerLoop;
 use rand_core::OsRng;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+#[cfg(feature = "gpu-metal")]
+use zeroize::{Zeroize, Zeroizing};
 
 #[cfg(feature = "truncated-challenges")]
 use crate::utils::arithmetic::{truncate, truncated_powers};
@@ -57,14 +69,8 @@ use crate::{
 #[cfg(feature = "gpu-blitzar")]
 use crate::poly::query::Query;
 
-#[cfg(feature = "gpu-blitzar")]
+#[cfg(any(feature = "gpu-blitzar", feature = "gpu-metal"))]
 use self::utils::construct_intermediate_set_metadata;
-
-#[cfg(feature = "gpu-blitzar")]
-thread_local! {
-    static RESIDENT_MULTIOPEN_ARENA: RefCell<Option<crate::poly::commitment::ResidentMultiopenArena>> =
-        const { RefCell::new(None) };
-}
 
 #[derive(Clone, Debug)]
 /// KZG verifier
@@ -72,16 +78,741 @@ pub struct KZGCommitmentScheme<E: Engine> {
     _marker: PhantomData<E>,
 }
 
-#[cfg(feature = "gpu-blitzar")]
+#[cfg(all(
+    any(
+        feature = "metal-resident-quotient-test-support",
+        feature = "metal-resident-quotient-diagnostic"
+    ),
+    target_os = "macos",
+    target_arch = "aarch64"
+))]
+pub(crate) fn commit_resident_quotient_lease(
+    session: &midnight_gpu_prover::metal::MetalSession,
+    params: &ParamsKZG<midnight_curves::Bls12>,
+    prepared_srs: &midnight_gpu_prover::PreparedResidentSrs,
+    lease: &midnight_gpu_prover::metal::ResidentQuotientMsmLease<'_>,
+) -> Result<Vec<midnight_curves::G1Projective>, String> {
+    let n = lease.piece_len();
+    if n != prepared_srs.n() as usize {
+        return Err("diagnostic quotient lease and prepared SRS lengths differ".to_owned());
+    }
+    if lease.prepared_srs_fingerprint() != prepared_srs.fingerprint() {
+        return Err("diagnostic quotient lease and prepared SRS fingerprints differ".to_owned());
+    }
+    let params_srs = params.prepared_resident_srs(prepared_srs.n())?;
+    if params_srs.fingerprint() != prepared_srs.fingerprint() {
+        return Err("CPU KZG parameters differ from the Metal-bound prepared SRS".to_owned());
+    }
+    if params.g.len() < n {
+        return Err(format!(
+            "CPU KZG coefficient SRS has length {}, but quotient MSM requires {n}",
+            params.g.len()
+        ));
+    }
+
+    midnight_gpu_prover::metal::msm_prepared_resident_quotient_batch(
+        session,
+        prepared_srs,
+        midnight_gpu_prover::metal::Bls12_381MsmBasis::Coefficient,
+        lease,
+        metal_msm_window_for_nonzero(n, n),
+    )
+    .map(|points| {
+        points
+            .into_iter()
+            .map(metal_g1_from_raw::<midnight_curves::G1Projective>)
+            .collect()
+    })
+    .map_err(|error| error.to_string())
+}
+
+#[cfg(all(
+    test,
+    any(
+        feature = "metal-resident-quotient-test-support",
+        feature = "metal-resident-quotient-diagnostic"
+    ),
+    target_os = "macos",
+    target_arch = "aarch64"
+))]
+#[allow(unsafe_code)]
+pub(crate) fn diagnostic_scalar_slice(
+    values: &[midnight_gpu_prover::RawFr],
+) -> &[midnight_curves::Fq] {
+    assert_eq!(
+        std::mem::size_of::<midnight_gpu_prover::RawFr>(),
+        std::mem::size_of::<midnight_curves::Fq>()
+    );
+    assert_eq!(
+        std::mem::align_of::<midnight_gpu_prover::RawFr>(),
+        std::mem::align_of::<midnight_curves::Fq>()
+    );
+    // SAFETY: `midnight_curves::Fq` is this codebase's BLS12-381 scalar
+    // field and is repr(transparent) over the same four little-endian reduced
+    // Montgomery limbs as `RawFr`. The callback pins the backing allocation.
+    unsafe {
+        std::slice::from_raw_parts(values.as_ptr().cast::<midnight_curves::Fq>(), values.len())
+    }
+}
+
+#[cfg(any(feature = "gpu-blitzar", feature = "gpu-metal"))]
 fn is_midnight_bls12_381<E: Engine>() -> bool
 where
-    E::Fr: 'static,
+    E::Fr: Sync + 'static,
     E::G1: 'static,
     E::G1Affine: 'static,
 {
     TypeId::of::<E::Fr>() == TypeId::of::<midnight_curves::Fq>()
         && TypeId::of::<E::G1>() == TypeId::of::<midnight_curves::G1Projective>()
         && TypeId::of::<E::G1Affine>() == TypeId::of::<midnight_curves::G1Affine>()
+}
+
+#[cfg(feature = "gpu-metal")]
+fn metal_msm_selected() -> bool {
+    if !midnight_curves::gpu_metal::enabled() {
+        return false;
+    }
+    match std::env::var("MIDNIGHT_METAL_MSM") {
+        Err(std::env::VarError::NotPresent) => true,
+        Ok(value) => match value.to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" | "metal" | "auto" => true,
+            "0" | "false" | "no" | "off" | "cpu" => false,
+            _ => panic!("MIDNIGHT_METAL_MSM must be on, off, metal, or cpu, got {value:?}"),
+        },
+        Err(std::env::VarError::NotUnicode(_)) => {
+            panic!("MIDNIGHT_METAL_MSM must be valid Unicode")
+        }
+    }
+}
+
+#[cfg(feature = "gpu-metal")]
+static METAL_HYBRID_CPU_MSM_LOCK: Mutex<()> = Mutex::new(());
+#[cfg(feature = "gpu-metal")]
+static METAL_MSM_CPU_MAX_NONZERO: OnceLock<usize> = OnceLock::new();
+#[cfg(feature = "gpu-metal")]
+// A bounded host partition removes tiny, launch-dominated commitments while
+// the Metal worker processes the rest of the same batch. The authentic
+// workload's measured crossover is 512 nonzero scalars; the cap below keeps
+// larger BLST work from contending with witness synthesis.
+const METAL_MSM_DEFAULT_CPU_MAX_NONZERO: usize = 512;
+#[cfg(feature = "gpu-metal")]
+const METAL_MSM_MAX_SAFE_CPU_NONZERO: usize = 8_192;
+
+#[cfg(feature = "gpu-metal")]
+fn metal_msm_cpu_max_nonzero() -> usize {
+    *METAL_MSM_CPU_MAX_NONZERO.get_or_init(|| {
+        let value = match std::env::var("MIDNIGHT_METAL_MSM_CPU_MAX_NONZERO") {
+            Ok(value) => value.parse::<usize>().unwrap_or_else(|_| {
+                panic!(
+                    "MIDNIGHT_METAL_MSM_CPU_MAX_NONZERO must be a non-negative integer, got {value:?}"
+                )
+            }),
+            Err(std::env::VarError::NotPresent) => METAL_MSM_DEFAULT_CPU_MAX_NONZERO,
+            Err(error) => panic!("could not read MIDNIGHT_METAL_MSM_CPU_MAX_NONZERO: {error}"),
+        };
+        assert!(
+            value <= METAL_MSM_MAX_SAFE_CPU_NONZERO,
+            "MIDNIGHT_METAL_MSM_CPU_MAX_NONZERO must not exceed \
+             {METAL_MSM_MAX_SAFE_CPU_NONZERO}; larger concurrent BLST MSMs can stall its shared \
+             worker pool"
+        );
+        value
+    })
+}
+
+#[cfg(feature = "gpu-metal")]
+fn metal_msm_nonzero_count<F: Field>(scalars: &[F]) -> usize {
+    scalars
+        .iter()
+        .filter(|scalar| !scalar.is_zero_vartime())
+        .count()
+}
+
+#[cfg(feature = "gpu-metal")]
+fn metal_duration_ns(duration: std::time::Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}
+
+#[cfg(feature = "gpu-metal")]
+#[allow(unsafe_code)]
+fn metal_cpu_prepared_msm(
+    prepared: &midnight_gpu_prover::PreparedResidentSrs,
+    basis: midnight_gpu_prover::metal::Bls12_381MsmBasis,
+    scalars: &[midnight_gpu_prover::RawFr],
+) -> Result<midnight_gpu_prover::metal::Bls12_381G1Projective, String> {
+    use blst::MultiPoint;
+
+    let prepared_bases = match basis {
+        midnight_gpu_prover::metal::Bls12_381MsmBasis::Coefficient => prepared.coefficient_bases(),
+        midnight_gpu_prover::metal::Bls12_381MsmBasis::Lagrange => prepared.lagrange_bases(),
+    };
+    if scalars.len() > prepared_bases.len() {
+        return Err(format!(
+            "CPU affine MSM has {} scalars but only {} prepared bases",
+            scalars.len(),
+            prepared_bases.len()
+        ));
+    }
+
+    let nonzero = scalars
+        .iter()
+        .filter(|scalar| scalar.limbs != [0; 4])
+        .count();
+    let mut bases = Vec::<blst::blst_p1_affine>::with_capacity(nonzero);
+    let mut scalar_bytes = Zeroizing::new(Vec::<u8>::with_capacity(nonzero.saturating_mul(32)));
+    for (scalar, base) in scalars.iter().zip(prepared_bases) {
+        if scalar.limbs == [0; 4] {
+            continue;
+        }
+        bases.push(blst::blst_p1_affine {
+            x: blst::blst_fp { l: base.x },
+            y: blst::blst_fp { l: base.y },
+        });
+        let mut raw = blst::blst_fr { l: scalar.limbs };
+        let mut canonical = [0_u64; 4];
+        // SAFETY: `raw` is this codebase's reduced Montgomery Fr ABI and the
+        // destination has exactly the four limbs required by BLST.
+        unsafe { blst::blst_uint64_from_fr(canonical.as_mut_ptr(), &raw) };
+        for limb in canonical {
+            scalar_bytes.extend_from_slice(&limb.to_le_bytes());
+        }
+        raw.l.zeroize();
+        canonical.zeroize();
+    }
+
+    let point = if bases.is_empty() {
+        blst::blst_p1::default()
+    } else {
+        bases.as_slice().mult(scalar_bytes.as_slice(), 255)
+    };
+    Ok(midnight_gpu_prover::metal::Bls12_381G1Projective {
+        x: point.x.l,
+        y: point.y.l,
+        z: point.z.l,
+    })
+}
+
+#[cfg(feature = "gpu-metal")]
+#[allow(unsafe_code)]
+fn try_metal_commit<E: Engine>(
+    params: &ParamsKZG<E>,
+    scalars: &[E::Fr],
+    basis: midnight_gpu_prover::metal::Bls12_381MsmBasis,
+) -> Option<Result<E::G1, String>>
+where
+    E::Fr: 'static,
+    E::G1: Copy + 'static,
+    E::G1Affine: CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1> + 'static,
+{
+    if !metal_msm_selected() || !is_midnight_bls12_381::<E>() || scalars.is_empty() {
+        return None;
+    }
+    Some((|| {
+        let nonzero_scalars = metal_msm_nonzero_count(scalars);
+        // SAFETY: the exact associated scalar, projective, and affine TypeIds
+        // above identify this repository's sole BLS12-381 specialization.
+        let params = unsafe {
+            &*(params as *const ParamsKZG<E> as *const ParamsKZG<midnight_curves::Bls12>)
+        };
+        let n = u32::try_from(params.g.len())
+            .map_err(|_| "Metal MSM SRS prefix exceeds u32".to_owned())?;
+        let prepared = params.prepared_resident_srs(n)?;
+        if nonzero_scalars <= metal_msm_cpu_max_nonzero() {
+            let lock_wait_started = std::time::Instant::now();
+            let _cpu_msm = METAL_HYBRID_CPU_MSM_LOCK
+                .lock()
+                .map_err(|_| "hybrid CPU MSM lock was poisoned".to_owned())?;
+            let lock_wait_ns = metal_duration_ns(lock_wait_started.elapsed());
+            let service_started = std::time::Instant::now();
+            let output = metal_cpu_prepared_msm(&prepared, basis, metal_raw_scalars(scalars))?;
+            let service_ns = metal_duration_ns(service_started.elapsed());
+            midnight_gpu_prover::metal::record_cpu_msm_partition(scalars.len(), nonzero_scalars);
+            midnight_gpu_prover::metal::record_cpu_msm_timing(lock_wait_ns, service_ns);
+            return Ok(metal_g1_from_raw::<E::G1>(output));
+        }
+        let session = midnight_gpu_prover::metal::diagnostic_shared_session()
+            .map_err(|error| error.to_string())?;
+        let raw = metal_raw_scalars(scalars);
+        let point = midnight_gpu_prover::metal::msm_prepared(
+            session,
+            &prepared,
+            basis,
+            raw,
+            metal_msm_window_for_nonzero(scalars.len(), nonzero_scalars),
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(metal_g1_from_raw(point))
+    })())
+}
+
+#[cfg(feature = "gpu-metal")]
+#[allow(unsafe_code)]
+fn try_metal_commit_batch<E: Engine, B>(
+    params: &ParamsKZG<E>,
+    polynomials: &[Polynomial<E::Fr, B>],
+    basis: midnight_gpu_prover::metal::Bls12_381MsmBasis,
+) -> Option<Result<Vec<E::G1>, String>>
+where
+    E::Fr: Sync + 'static,
+    E::G1: Copy + 'static,
+    E::G1Affine: CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1> + 'static,
+{
+    if !metal_msm_selected()
+        || !is_midnight_bls12_381::<E>()
+        || polynomials.is_empty()
+        || polynomials
+            .iter()
+            .any(|polynomial| polynomial.values.is_empty())
+    {
+        return None;
+    }
+    Some((|| {
+        let nonzero_counts = polynomials
+            .iter()
+            .map(|polynomial| metal_msm_nonzero_count(&polynomial.values))
+            .collect::<Vec<_>>();
+        let cpu_max_nonzero = metal_msm_cpu_max_nonzero();
+        let device_eligible = nonzero_counts
+            .iter()
+            .map(|&nonzero| nonzero > cpu_max_nonzero)
+            .collect::<Vec<_>>();
+        let mut outputs = vec![None; polynomials.len()];
+        // SAFETY: see `try_metal_commit`; the same exact TypeId gate applies.
+        let metal_params = unsafe {
+            &*(params as *const ParamsKZG<E> as *const ParamsKZG<midnight_curves::Bls12>)
+        };
+        let n = u32::try_from(metal_params.g.len())
+            .map_err(|_| "Metal MSM SRS prefix exceeds u32".to_owned())?;
+        let prepared = metal_params.prepared_resident_srs(n)?;
+
+        let mut device_groups = Vec::<(
+            midnight_gpu_prover::metal::Bls12_381MsmWindow,
+            Vec<(usize, &[midnight_gpu_prover::RawFr])>,
+        )>::new();
+        for (index, &eligible) in device_eligible.iter().enumerate() {
+            if !eligible {
+                continue;
+            }
+            let window = metal_msm_window_for_nonzero(
+                polynomials[index].values.len(),
+                nonzero_counts[index],
+            );
+            let raw = metal_raw_scalars(polynomials[index].values.as_slice());
+            if let Some((_, batches)) = device_groups
+                .iter_mut()
+                .find(|(candidate, _)| *candidate == window)
+            {
+                batches.push((index, raw));
+            } else {
+                device_groups.push((window, vec![(index, raw)]));
+            }
+        }
+
+        let run_cpu = || -> Result<Vec<(usize, E::G1)>, String> {
+            if device_eligible.iter().all(|&eligible| eligible) {
+                return Ok(Vec::new());
+            }
+            let mut cpu_outputs = Vec::new();
+            let lock_wait_started = std::time::Instant::now();
+            let _cpu_msm = METAL_HYBRID_CPU_MSM_LOCK
+                .lock()
+                .map_err(|_| "hybrid CPU MSM lock was poisoned".to_owned())?;
+            let lock_wait_ns = metal_duration_ns(lock_wait_started.elapsed());
+            let service_started = std::time::Instant::now();
+            for (index, (polynomial, &eligible)) in
+                polynomials.iter().zip(&device_eligible).enumerate()
+            {
+                if !eligible {
+                    let point = metal_g1_from_raw::<E::G1>(metal_cpu_prepared_msm(
+                        &prepared,
+                        basis,
+                        metal_raw_scalars(&polynomial.values),
+                    )?);
+                    cpu_outputs.push((index, point));
+                    midnight_gpu_prover::metal::record_cpu_msm_partition(
+                        polynomial.values.len(),
+                        nonzero_counts[index],
+                    );
+                }
+            }
+            let service_ns = metal_duration_ns(service_started.elapsed());
+            midnight_gpu_prover::metal::record_cpu_msm_timing(lock_wait_ns, service_ns);
+            Ok(cpu_outputs)
+        };
+
+        let session = midnight_gpu_prover::metal::diagnostic_shared_session()
+            .map_err(|error| error.to_string())?;
+        let run_metal = || -> Result<_, String> {
+            let mut completed = Vec::new();
+            for (window, batches) in &device_groups {
+                let raw = batches
+                    .iter()
+                    .map(|(_, scalars)| *scalars)
+                    .collect::<Vec<_>>();
+                let metal_outputs = midnight_gpu_prover::metal::msm_prepared_batch(
+                    session, &prepared, basis, &raw, *window,
+                )
+                .map_err(|error| error.to_string())?;
+                if metal_outputs.len() != batches.len() {
+                    return Err("hybrid Metal MSM returned the wrong output count".to_owned());
+                }
+                completed.extend(batches.iter().map(|(index, _)| *index).zip(metal_outputs));
+            }
+            Ok(completed)
+        };
+
+        let has_cpu = device_eligible.iter().any(|&eligible| !eligible);
+        let has_metal = !device_groups.is_empty();
+        let (cpu_outputs, metal_outputs) = match (has_cpu, has_metal) {
+            (true, true) => std::thread::scope(|scope| {
+                let metal = scope.spawn(run_metal);
+                let cpu = run_cpu();
+                let metal = metal
+                    .join()
+                    .map_err(|_| "hybrid Metal MSM dispatch thread panicked".to_owned())?;
+                Ok::<_, String>((cpu?, metal?))
+            })?,
+            (true, false) => (run_cpu()?, Vec::new()),
+            (false, true) => (Vec::new(), run_metal()?),
+            (false, false) => return Err("hybrid MSM batch has no outputs".to_owned()),
+        };
+        for (index, point) in cpu_outputs {
+            outputs[index] = Some(point);
+        }
+        for (index, point) in metal_outputs {
+            outputs[index] = Some(metal_g1_from_raw(point));
+        }
+        if outputs.iter().any(Option::is_none) {
+            return Err("hybrid MSM output is missing".to_owned());
+        }
+        Ok(outputs
+            .into_iter()
+            .map(|output| {
+                output.expect("the complete hybrid output vector was checked immediately above")
+            })
+            .collect())
+    })())
+}
+
+#[cfg(any(
+    feature = "gpu-metal",
+    feature = "metal-resident-quotient-test-support"
+))]
+fn metal_msm_window_for_nonzero(
+    term_count: usize,
+    nonzero_count: usize,
+) -> midnight_gpu_prover::metal::Bls12_381MsmWindow {
+    match std::env::var("MIDNIGHT_METAL_MSM_WINDOW").as_deref() {
+        Ok("6") => midnight_gpu_prover::metal::Bls12_381MsmWindow::W6,
+        Ok("7") => midnight_gpu_prover::metal::Bls12_381MsmWindow::W7,
+        Ok("8") => midnight_gpu_prover::metal::Bls12_381MsmWindow::W8,
+        Ok("9") => midnight_gpu_prover::metal::Bls12_381MsmWindow::W9,
+        Ok("10") => midnight_gpu_prover::metal::Bls12_381MsmWindow::W10,
+        Ok("fixed11") | Ok("fixed-w11") => midnight_gpu_prover::metal::Bls12_381MsmWindow::FixedW11,
+        Ok("fixed12") | Ok("fixed-w12") => midnight_gpu_prover::metal::Bls12_381MsmWindow::FixedW12,
+        Ok("fixed13") | Ok("fixed-w13") => midnight_gpu_prover::metal::Bls12_381MsmWindow::FixedW13,
+        Ok("fixed14") | Ok("fixed-w14") => midnight_gpu_prover::metal::Bls12_381MsmWindow::FixedW14,
+        Ok("fixed15") | Ok("fixed-w15") => midnight_gpu_prover::metal::Bls12_381MsmWindow::FixedW15,
+        Ok("fixed16") | Ok("fixed-w16") => midnight_gpu_prover::metal::Bls12_381MsmWindow::FixedW16,
+        Err(std::env::VarError::NotPresent) => {
+            default_metal_msm_window_for_nonzero(term_count, nonzero_count)
+        }
+        Ok(value) => {
+            panic!(
+                "MIDNIGHT_METAL_MSM_WINDOW must be one of 6, 7, 8, 9, 10, fixed11, fixed12, fixed13, fixed14, fixed15, or fixed16, got {value:?}"
+            )
+        }
+        Err(std::env::VarError::NotUnicode(_)) => {
+            panic!("MIDNIGHT_METAL_MSM_WINDOW must be valid Unicode")
+        }
+    }
+}
+
+#[cfg(any(
+    feature = "gpu-metal",
+    feature = "metal-resident-quotient-test-support"
+))]
+fn default_metal_msm_window_for_nonzero(
+    term_count: usize,
+    nonzero_count: usize,
+) -> midnight_gpu_prover::metal::Bls12_381MsmWindow {
+    if nonzero_count.saturating_mul(8) <= term_count.saturating_mul(5) {
+        midnight_gpu_prover::metal::Bls12_381MsmWindow::FixedW11
+    } else {
+        midnight_gpu_prover::metal::Bls12_381MsmWindow::FixedW13
+    }
+}
+
+#[cfg(feature = "gpu-metal")]
+#[allow(unsafe_code)]
+fn metal_raw_scalars<F: 'static>(scalars: &[F]) -> &[midnight_gpu_prover::RawFr] {
+    assert_eq!(TypeId::of::<F>(), TypeId::of::<midnight_curves::Fq>());
+    assert_eq!(
+        std::mem::size_of::<F>(),
+        std::mem::size_of::<midnight_gpu_prover::RawFr>()
+    );
+    assert_eq!(
+        std::mem::align_of::<F>(),
+        std::mem::align_of::<midnight_gpu_prover::RawFr>()
+    );
+    // SAFETY: the TypeId and layout checks bind `F` to the transparent Fq
+    // wrapper whose raw value is the same reduced four-limb Montgomery ABI.
+    unsafe {
+        std::slice::from_raw_parts(
+            scalars.as_ptr().cast::<midnight_gpu_prover::RawFr>(),
+            scalars.len(),
+        )
+    }
+}
+
+#[cfg(any(
+    feature = "gpu-metal",
+    feature = "metal-resident-quotient-test-support"
+))]
+#[allow(unsafe_code)]
+fn metal_g1_from_raw<C: Copy + 'static>(
+    raw: midnight_gpu_prover::metal::Bls12_381G1Projective,
+) -> C {
+    assert_eq!(
+        TypeId::of::<C>(),
+        TypeId::of::<midnight_curves::G1Projective>()
+    );
+    let mut point = midnight_curves::G1Projective::default();
+    *point.as_mut() = blst::blst_p1 {
+        x: blst::blst_fp { l: raw.x },
+        y: blst::blst_fp { l: raw.y },
+        z: blst::blst_fp { l: raw.z },
+    };
+    // SAFETY: `C` is exactly the checked transparent G1Projective type.
+    unsafe { std::mem::transmute_copy(&point) }
+}
+
+#[cfg(feature = "gpu-metal")]
+fn metal_resident_multiopen_enabled(poly_len: usize) -> bool {
+    if !metal_msm_selected() {
+        return false;
+    }
+    let enabled = matches!(
+        std::env::var("MIDNIGHT_METAL_RESIDENT_MULTIOPEN")
+            .unwrap_or_else(|_| "on".to_owned())
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on" | "metal" | "auto"
+    );
+    let min_len = std::env::var("MIDNIGHT_METAL_RESIDENT_MULTIOPEN_MIN_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(1 << 14);
+    enabled && poly_len >= min_len
+}
+
+#[cfg(feature = "gpu-metal")]
+fn metal_raw_scalar<F: Field + 'static>(value: F) -> midnight_gpu_prover::RawFr {
+    metal_raw_scalars(std::slice::from_ref(&value))[0]
+}
+
+#[cfg(feature = "gpu-metal")]
+#[allow(unsafe_code)]
+fn metal_field_from_raw<F: Field + 'static>(value: midnight_gpu_prover::RawFr) -> F {
+    assert_eq!(TypeId::of::<F>(), TypeId::of::<midnight_curves::Fq>());
+    assert_eq!(
+        std::mem::size_of::<F>(),
+        std::mem::size_of::<midnight_gpu_prover::RawFr>()
+    );
+    // SAFETY: the exact TypeId gate binds `F` to the transparent Fq wrapper,
+    // and both values are the same reduced four-limb Montgomery representation.
+    unsafe { std::mem::transmute_copy(&value) }
+}
+
+#[cfg(feature = "gpu-metal")]
+#[allow(unsafe_code)]
+fn try_metal_resident_multi_open<E: MultiMillerLoop, T: Transcript>(
+    params: &ParamsKZG<E>,
+    prover_query: &[ProverQuery<E::Fr>],
+    transcript: &mut T,
+    x1: E::Fr,
+    x2: E::Fr,
+) -> Option<Result<(), Error>>
+where
+    E::Fr: Sync + 'static + Sampleable<T::Hash> + Hash + Ord + Hashable<T::Hash>,
+    E::G1: Default
+        + Copy
+        + CurveExt<ScalarExt = E::Fr>
+        + ProcessedSerdeObject
+        + Hashable<T::Hash>
+        + 'static,
+    E::G1Affine: Default + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1> + 'static,
+    ParamsKZG<E>: Sync,
+{
+    let poly_len = prover_query.first().map(|query| query.poly.len())?;
+    if !is_midnight_bls12_381::<E>() || !metal_resident_multiopen_enabled(poly_len) {
+        return None;
+    }
+
+    Some((|| {
+        let (poly_map, point_sets, _) = construct_intermediate_set_metadata(prover_query)?;
+        if poly_map.is_empty()
+            || point_sets.is_empty()
+            || poly_map
+                .iter()
+                .any(|data| data.commitment.poly.len() != poly_len)
+        {
+            return Err(Error::OpeningError);
+        }
+
+        let mut order = (0..point_sets.len()).collect::<Vec<_>>();
+        order.sort_by_key(|&index| (point_sets[index].len(), index));
+        let q_polynomials = crate::perf_timer::timed_count_detailed(
+            "proof_server.prover.kzg.multi_open.q_polys.cpu_for_resident_metal",
+            poly_len.saturating_mul(poly_map.len()),
+            || {
+                order
+                    .iter()
+                    .map(|&set_index| {
+                        let sources = poly_map
+                            .iter()
+                            .filter_map(|data| {
+                                (data.set_index == set_index).then_some(data.commitment.poly)
+                            })
+                            .collect::<Vec<_>>();
+                        #[cfg(feature = "truncated-challenges")]
+                        let coefficients =
+                            truncated_powers(x1).take(sources.len()).collect::<Vec<_>>();
+                        #[cfg(not(feature = "truncated-challenges"))]
+                        let coefficients = powers(x1).take(sources.len()).collect::<Vec<_>>();
+                        polynomial_inner_product_refs(&sources, &coefficients)
+                    })
+                    .collect::<Vec<_>>()
+            },
+        );
+        let polynomials = q_polynomials
+            .iter()
+            .map(|polynomial| metal_raw_scalars(polynomial.values.as_slice()))
+            .collect::<Vec<_>>();
+        let mut q_offsets = Vec::with_capacity(point_sets.len() + 1);
+        let mut q_poly_indices = Vec::with_capacity(point_sets.len());
+        let mut q_coefficients = Vec::with_capacity(point_sets.len());
+        let mut point_offsets = Vec::with_capacity(point_sets.len() + 1);
+        let mut points = Vec::new();
+        q_offsets.push(0);
+        point_offsets.push(0);
+        for (q_index, &set_index) in order.iter().enumerate() {
+            q_poly_indices.push(u32::try_from(q_index).map_err(|_| Error::OpeningError)?);
+            q_coefficients.push(metal_raw_scalar(E::Fr::ONE));
+            q_offsets.push(u32::try_from(q_poly_indices.len()).map_err(|_| Error::OpeningError)?);
+            points.extend(point_sets[set_index].iter().copied().map(metal_raw_scalar));
+            point_offsets.push(u32::try_from(points.len()).map_err(|_| Error::OpeningError)?);
+        }
+        let f_weights = powers(x2)
+            .take(point_sets.len())
+            .map(metal_raw_scalar)
+            .collect::<Vec<_>>();
+
+        // SAFETY: the exact scalar/projective/affine TypeId gate above binds
+        // this generic instantiation to this repository's BLS12-381 KZG types.
+        let metal_params = unsafe {
+            &*(params as *const ParamsKZG<E> as *const ParamsKZG<midnight_curves::Bls12>)
+        };
+        let prepared = metal_params
+            .prepared_resident_srs(u32::try_from(poly_len).map_err(|_| Error::OpeningError)?)
+            .map_err(|_| Error::OpeningError)?;
+        let session = midnight_gpu_prover::metal::diagnostic_shared_session()
+            .map_err(|_| Error::OpeningError)?;
+        let request = midnight_gpu_prover::metal::ResidentMultiopenRequest::new(
+            &polynomials,
+            &q_offsets,
+            &q_poly_indices,
+            &q_coefficients,
+            &point_offsets,
+            &points,
+            &f_weights,
+        );
+        let window = metal_msm_window_for_nonzero(poly_len, poly_len);
+        crate::perf_timer::timed_count_detailed(
+            "proof_server.prover.kzg.multi_open.resident_metal",
+            poly_len.saturating_mul(polynomials.len()),
+            || {
+                midnight_gpu_prover::metal::with_resident_multiopen(session, request, |arena| {
+                    let f_com = crate::perf_timer::timed_count_detailed(
+                        "proof_server.prover.kzg.multi_open.f_commit.resident_metal",
+                        poly_len,
+                        || {
+                            let f = arena.f_polynomial()?;
+                            midnight_gpu_prover::metal::msm_prepared_resident_multiopen(
+                                session,
+                                &prepared,
+                                midnight_gpu_prover::metal::Bls12_381MsmBasis::Coefficient,
+                                &f,
+                                window,
+                            )
+                        },
+                    )?;
+                    let f_com = metal_g1_from_raw::<E::G1>(f_com);
+                    transcript.write(&f_com).map_err(|_| {
+                        midnight_gpu_prover::ResidentError::Backend(
+                            "failed to write resident Metal f commitment".to_owned(),
+                        )
+                    })?;
+
+                    let x3: E::Fr = transcript.squeeze_challenge();
+                    #[cfg(feature = "truncated-challenges")]
+                    let x3 = truncate(x3);
+                    let q_evaluations = crate::perf_timer::timed_count_detailed(
+                        "proof_server.prover.kzg.multi_open.q_eval.resident_metal",
+                        poly_len.saturating_mul(arena.q_count()),
+                        || arena.evaluate_q(metal_raw_scalar(x3)),
+                    )?;
+                    for evaluation in q_evaluations {
+                        transcript
+                            .write(&metal_field_from_raw::<E::Fr>(evaluation))
+                            .map_err(|_| {
+                                midnight_gpu_prover::ResidentError::Backend(
+                                    "failed to write a resident Metal q evaluation".to_owned(),
+                                )
+                            })?;
+                    }
+
+                    let x4: E::Fr = transcript.squeeze_challenge();
+                    #[cfg(feature = "truncated-challenges")]
+                    let pi_weights = truncated_powers(x4)
+                        .take(arena.q_count() + 1)
+                        .map(metal_raw_scalar)
+                        .collect::<Vec<_>>();
+                    #[cfg(not(feature = "truncated-challenges"))]
+                    let pi_weights = powers(x4)
+                        .take(arena.q_count() + 1)
+                        .map(metal_raw_scalar)
+                        .collect::<Vec<_>>();
+                    let pi_polynomial = crate::perf_timer::timed_count_detailed(
+                        "proof_server.prover.kzg.multi_open.pi_poly.resident_metal",
+                        poly_len.saturating_mul(arena.q_count() + 1),
+                        || arena.compute_pi(metal_raw_scalar(x3), &pi_weights),
+                    )?;
+                    let pi = crate::perf_timer::timed_count_detailed(
+                        "proof_server.prover.kzg.multi_open.pi_commit.resident_metal",
+                        poly_len,
+                        || {
+                            midnight_gpu_prover::metal::msm_prepared_resident_multiopen(
+                                session,
+                                &prepared,
+                                midnight_gpu_prover::metal::Bls12_381MsmBasis::Coefficient,
+                                &pi_polynomial,
+                                window,
+                            )
+                        },
+                    )?;
+                    transcript
+                        .write(&metal_g1_from_raw::<E::G1>(pi))
+                        .map_err(|_| {
+                            midnight_gpu_prover::ResidentError::Backend(
+                                "failed to write resident Metal pi commitment".to_owned(),
+                            )
+                        })
+                })
+            },
+        )
+        .map_err(|_| Error::OpeningError)
+    })())
 }
 
 fn polynomial_inner_product<F: Field + 'static>(
@@ -95,45 +826,46 @@ fn polynomial_inner_product<F: Field + 'static>(
         return poly;
     }
 
-    let mut scalars = scalars.into_iter();
-    let first = polys.first().expect("polynomial inner product is empty");
-    let first_scalar = scalars
-        .next()
-        .expect("polynomial inner product missing first scalar");
+    let polys = polys.iter().collect::<Vec<_>>();
+    polynomial_inner_product_refs(&polys, &scalars)
+}
 
-    let mut acc = first.clone();
-    if first_scalar == F::ZERO {
-        parallelize(&mut acc.values, |values, _| {
-            for value in values {
+fn polynomial_inner_product_refs<F: Field>(
+    polys: &[&Polynomial<F, Coeff>],
+    scalars: &[F],
+) -> Polynomial<F, Coeff> {
+    assert_eq!(polys.len(), scalars.len());
+    let first = polys.first().expect("polynomial inner product is empty");
+    let first_scalar = scalars[0];
+    let mut acc = (*first).clone();
+    let terms = polys
+        .iter()
+        .skip(1)
+        .zip(&scalars[1..])
+        .filter_map(|(&poly, &scalar)| (scalar != F::ZERO).then_some((poly, scalar)))
+        .collect::<Vec<_>>();
+
+    // Keep each output coefficient in a register while applying every source.
+    // Besides avoiding one read/write pass over the accumulator per polynomial,
+    // this creates one Rayon scope instead of one scope per source. That matters
+    // when several proofs build their multi-open polynomials concurrently.
+    parallelize(&mut acc.values, |values, start| {
+        for (offset, value) in values.iter_mut().enumerate() {
+            if first_scalar == F::ZERO {
                 *value = F::ZERO;
-            }
-        });
-    } else if first_scalar != F::ONE {
-        parallelize(&mut acc.values, |values, _| {
-            for value in values {
+            } else if first_scalar != F::ONE {
                 *value *= first_scalar;
             }
-        });
-    }
-
-    for (poly, scalar) in polys.iter().skip(1).zip(scalars) {
-        if scalar == F::ZERO {
-            continue;
-        }
-        if scalar == F::ONE {
-            parallelize(&mut acc.values, |values, start| {
-                for (value, rhs) in values.iter_mut().zip(poly.values[start..].iter()) {
-                    *value += rhs;
+            let coefficient = start + offset;
+            for (poly, scalar) in &terms {
+                if *scalar == F::ONE {
+                    *value += poly.values[coefficient];
+                } else {
+                    *value += poly.values[coefficient] * *scalar;
                 }
-            });
-        } else {
-            parallelize(&mut acc.values, |values, start| {
-                for (value, rhs) in values.iter_mut().zip(poly.values[start..].iter()) {
-                    *value += *rhs * scalar;
-                }
-            });
+            }
         }
-    }
+    });
 
     acc
 }
@@ -168,14 +900,18 @@ fn try_polynomial_inner_product_sppark<F: Field + 'static>(
     let scalars = scalars.iter().copied().map(raw_scalar).collect::<Vec<_>>();
     let mut out = vec![midnight_sppark_msm::Bls12_381Fr::default(); poly_len];
 
-    midnight_sppark_msm::bls12_381_fr_poly_lincomb(
+    if midnight_sppark_msm::bls12_381_fr_poly_lincomb(
         &mut out,
         &flat,
         poly_len,
         polys.len(),
         &scalars,
     )
-    .ok()?;
+    .is_err()
+    {
+        midnight_sppark_msm::record_accelerator_fallback();
+        return None;
+    }
 
     Some(Polynomial {
         values: out.into_iter().map(field_from_raw).collect(),
@@ -339,6 +1075,22 @@ where
     ) -> Self::Commitment {
         let size = polynomial.values.len();
         assert!(params.g.len() >= size);
+        #[cfg(feature = "gpu-metal")]
+        if metal_msm_selected() && is_midnight_bls12_381::<E>() && !polynomial.values.is_empty() {
+            return crate::perf_timer::timed_count(
+                "proof_server.prover.kzg.commit.coeff_msm.metal",
+                size,
+                || {
+                    try_metal_commit(
+                        params,
+                        &polynomial.values,
+                        midnight_gpu_prover::metal::Bls12_381MsmBasis::Coefficient,
+                    )
+                    .expect("selected Metal coefficient MSM shape became ineligible")
+                    .expect("selected Metal coefficient MSM failed")
+                },
+            );
+        }
         #[cfg(feature = "gpu-blitzar")]
         if gpu_blitzar::should_accelerate(size, 1) {
             return crate::perf_timer::timed_count(
@@ -369,6 +1121,31 @@ where
             .max()
             .unwrap_or(0);
         assert!(params.g.len() >= size);
+
+        #[cfg(feature = "gpu-metal")]
+        if metal_msm_selected()
+            && is_midnight_bls12_381::<E>()
+            && polynomials
+                .iter()
+                .all(|polynomial| !polynomial.values.is_empty())
+        {
+            return crate::perf_timer::timed_count(
+                "proof_server.prover.kzg.commit.coeff_msm_batch.metal",
+                polynomials
+                    .iter()
+                    .map(|polynomial| polynomial.values.len())
+                    .sum(),
+                || {
+                    try_metal_commit_batch(
+                        params,
+                        polynomials,
+                        midnight_gpu_prover::metal::Bls12_381MsmBasis::Coefficient,
+                    )
+                    .expect("selected Metal coefficient MSM batch shape became ineligible")
+                    .expect("selected Metal coefficient MSM batch failed")
+                },
+            );
+        }
 
         #[cfg(feature = "gpu-blitzar")]
         {
@@ -474,6 +1251,23 @@ where
 
         assert!(params.g_lagrange.len() >= size);
 
+        #[cfg(feature = "gpu-metal")]
+        if metal_msm_selected() && is_midnight_bls12_381::<E>() && !poly.values.is_empty() {
+            return crate::perf_timer::timed_count(
+                "proof_server.prover.kzg.commit.lagrange_msm.metal",
+                size,
+                || {
+                    try_metal_commit(
+                        params,
+                        &poly.values,
+                        midnight_gpu_prover::metal::Bls12_381MsmBasis::Lagrange,
+                    )
+                    .expect("selected Metal Lagrange MSM shape became ineligible")
+                    .expect("selected Metal Lagrange MSM failed")
+                },
+            );
+        }
+
         #[cfg(feature = "gpu-blitzar")]
         if gpu_blitzar::should_accelerate(size, 1) {
             return crate::perf_timer::timed_count(
@@ -505,6 +1299,31 @@ where
             .max()
             .unwrap_or(0);
         assert!(params.g_lagrange.len() >= size);
+
+        #[cfg(feature = "gpu-metal")]
+        if metal_msm_selected()
+            && is_midnight_bls12_381::<E>()
+            && polynomials
+                .iter()
+                .all(|polynomial| !polynomial.values.is_empty())
+        {
+            return crate::perf_timer::timed_count(
+                "proof_server.prover.kzg.commit.lagrange_msm_batch.metal",
+                polynomials
+                    .iter()
+                    .map(|polynomial| polynomial.values.len())
+                    .sum(),
+                || {
+                    try_metal_commit_batch(
+                        params,
+                        polynomials,
+                        midnight_gpu_prover::metal::Bls12_381MsmBasis::Lagrange,
+                    )
+                    .expect("selected Metal Lagrange MSM batch shape became ineligible")
+                    .expect("selected Metal Lagrange MSM batch failed")
+                },
+            );
+        }
 
         #[cfg(feature = "gpu-blitzar")]
         {
@@ -960,6 +1779,214 @@ where
         E::Fr: Sampleable<T::Hash> + Hash + Ord + Hashable<T::Hash>,
         E::G1: Hashable<T::Hash>,
     {
+        #[cfg(feature = "gpu-blitzar")]
+        {
+            Self::multi_open_impl(params, prover_query, transcript, None)
+        }
+        #[cfg(not(feature = "gpu-blitzar"))]
+        {
+            Self::multi_open_impl(params, prover_query, transcript)
+        }
+    }
+
+    #[cfg(feature = "gpu-blitzar")]
+    fn multi_open_with_arena<T: Transcript>(
+        params: &Self::Parameters,
+        prover_query: &[ProverQuery<E::Fr>],
+        transcript: &mut T,
+        arena: Option<crate::poly::commitment::ResidentMultiopenArena>,
+    ) -> Result<(), Error>
+    where
+        E::Fr: Sampleable<T::Hash> + Hash + Ord + Hashable<T::Hash>,
+        E::G1: Hashable<T::Hash>,
+    {
+        Self::multi_open_impl(params, prover_query, transcript, arena)
+    }
+
+    fn multi_prepare<'com, T: Transcript>(
+        verifier_query: &[VerifierQuery<'com, E::Fr, KZGCommitmentScheme<E>>],
+        transcript: &mut T,
+    ) -> Result<DualMSM<E>, Error>
+    where
+        E::Fr: Sampleable<T::Hash> + Ord + Hash + Hashable<T::Hash>,
+        E::G1: 'com + Hashable<T::Hash> + CurveExt<ScalarExt = E::Fr>,
+    {
+        // Refer to the halo2 book for docs:
+        // https://zcash.github.io/halo2/design/proving-system/multipoint-opening.html
+        let x1: E::Fr = transcript.squeeze_challenge();
+        let x2: E::Fr = transcript.squeeze_challenge();
+
+        let (commitment_map, point_sets) = construct_intermediate_sets(verifier_query)?;
+
+        let mut q_coms: Vec<_> = vec![vec![]; point_sets.len()];
+        let mut q_eval_sets = vec![vec![]; point_sets.len()];
+
+        for com_data in commitment_map.into_iter() {
+            let mut msm = MSMKZG::init();
+            let eval_point_opt = if com_data.commitment.is_chopped() {
+                // When the commitment is in chopped form, we require that it be evaluated
+                // in a single point.
+                debug_assert!(com_data.point_indices.len() == 1);
+                Some(point_sets[com_data.set_index][com_data.point_indices[0]])
+            } else {
+                None
+            };
+            for (scalar, commitment) in com_data.commitment.as_terms(eval_point_opt) {
+                msm.append_term(scalar, commitment, com_data.commitment_label.clone());
+            }
+            q_coms[com_data.set_index].push(msm);
+            q_eval_sets[com_data.set_index].push(com_data.evals);
+        }
+
+        let nb_x1_powers = q_coms.iter().map(|v| v.len()).max().unwrap_or(0);
+        assert!(nb_x1_powers >= q_eval_sets.iter().map(|v| v.len()).max().unwrap_or(0));
+
+        #[cfg(feature = "truncated-challenges")]
+        let powers_x1 = truncated_powers(x1).take(nb_x1_powers).collect::<Vec<_>>();
+
+        #[cfg(not(feature = "truncated-challenges"))]
+        let powers_x1 = powers(x1).take(nb_x1_powers).collect::<Vec<_>>();
+
+        let q_coms = q_coms
+            .into_iter()
+            .map(|msms| msm_inner_product(msms, &powers_x1))
+            .collect::<Vec<_>>();
+
+        let q_eval_sets = q_eval_sets
+            .iter()
+            .map(|evals| evals_inner_product(evals, &powers_x1))
+            .collect::<Vec<_>>();
+
+        // Sort point sets by ascending cardinality to ensure the first set is the one
+        // that contains fixed commitments (which are evaluated at x only). This
+        // property is not necessary for the actual proving system, but it is important
+        // for in-circuit verification of proofs. (It enables an optimization based on
+        // an internal collapse.)
+        //
+        // The (len, i) key provides a deterministic total order even when two sets
+        // share the same cardinality.
+        let (q_coms, q_eval_sets, point_sets) = {
+            let mut order: Vec<usize> = (0..point_sets.len()).collect();
+            order.sort_by_key(|&i| (point_sets[i].len(), i));
+            let q_coms: Vec<_> = order.iter().map(|&i| q_coms[i].clone()).collect();
+            let q_eval_sets: Vec<_> = order.iter().map(|&i| q_eval_sets[i].clone()).collect();
+            let point_sets: Vec<_> = order.iter().map(|&i| point_sets[i].clone()).collect();
+            (q_coms, q_eval_sets, point_sets)
+        };
+
+        let f_com: E::G1 = transcript.read().map_err(|_| Error::SamplingError)?;
+
+        // Sample a challenge x_3 for checking that f(X) was committed to
+        // correctly.
+        let x3: E::Fr = transcript.squeeze_challenge();
+        #[cfg(feature = "truncated-challenges")]
+        let x3 = truncate(x3);
+
+        let mut q_evals_on_x3 = Vec::<E::Fr>::with_capacity(q_eval_sets.len());
+        for _ in 0..q_eval_sets.len() {
+            q_evals_on_x3.push(transcript.read().map_err(|_| Error::SamplingError)?);
+        }
+
+        // We can compute the expected msm_eval at x_3 using the u provided
+        // by the prover and from x_2
+        let f_eval = point_sets
+            .iter()
+            .zip(q_eval_sets.iter())
+            .zip(q_evals_on_x3.iter())
+            .rev()
+            .fold(E::Fr::ZERO, |acc_eval, ((points, evals), proof_eval)| {
+                let r_poly = lagrange_interpolate(points, evals);
+                let r_eval = eval_polynomial(&r_poly, x3);
+                // eval = (proof_eval - r_eval) / prod_i (x3 - point_i)
+                let den = points
+                    .iter()
+                    .fold(E::Fr::ONE, |acc, point| acc * &(x3 - point));
+                let eval = (*proof_eval - &r_eval) * den.invert().unwrap();
+                acc_eval * &(x2) + &eval
+            });
+
+        let x4: E::Fr = transcript.squeeze_challenge();
+
+        let final_com = {
+            let size = q_coms.len() + 1;
+            let mut coms = q_coms;
+            let mut f_com_as_msm = MSMKZG::init();
+
+            f_com_as_msm.append_term(E::Fr::ONE, f_com, CommitmentLabel::NoLabel);
+
+            // Collapse all MSMs before combining with x4 powers, to match the
+            // in-circuit verifier. Skip the first one since its x4 power is 1.
+            #[cfg(feature = "truncated-challenges")]
+            coms.iter_mut().skip(1).for_each(MSMKZG::collapse);
+            coms.push(f_com_as_msm);
+
+            #[cfg(feature = "truncated-challenges")]
+            let powers = truncated_powers(x4);
+
+            #[cfg(not(feature = "truncated-challenges"))]
+            let powers = powers(x4);
+
+            msm_inner_product(coms, &powers.take(size).collect::<Vec<_>>())
+        };
+
+        let v = {
+            let mut evals = q_evals_on_x3;
+            evals.push(f_eval);
+
+            #[cfg(feature = "truncated-challenges")]
+            let powers = truncated_powers(x4);
+
+            #[cfg(not(feature = "truncated-challenges"))]
+            let powers = powers(x4);
+
+            inner_product(&evals, powers)
+        };
+
+        let pi: E::G1 = transcript.read().map_err(|_| Error::SamplingError)?;
+
+        let mut pi_msm = MSMKZG::<E>::init();
+        pi_msm.append_term(E::Fr::ONE, pi, CommitmentLabel::Custom("π".into()));
+
+        // Scale zπ - vG
+        let scaled_pi = MSMKZG {
+            scalars: vec![x3, v],
+            bases: vec![pi, -E::G1::generator()],
+            labels: vec![
+                CommitmentLabel::Custom("π".into()),
+                CommitmentLabel::Custom("-G".into()),
+            ],
+        };
+
+        // (π, C − vG + zπ)
+        let mut msm_accumulator = DualMSM {
+            left: pi_msm,
+            right: final_com,
+        };
+        msm_accumulator.right.add_msm(&scaled_pi);
+
+        Ok(msm_accumulator)
+    }
+}
+
+impl<E: MultiMillerLoop> KZGCommitmentScheme<E>
+where
+    E::Fr: Sync + 'static,
+    E::G1: Default + CurveExt<ScalarExt = E::Fr> + ProcessedSerdeObject + 'static,
+    E::G1Affine: Default + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1> + 'static,
+    ParamsKZG<E>: Sync,
+{
+    fn multi_open_impl<T: Transcript>(
+        params: &ParamsKZG<E>,
+        prover_query: &[ProverQuery<E::Fr>],
+        transcript: &mut T,
+        #[cfg(feature = "gpu-blitzar")] mut resident_multiopen_arena: Option<
+            crate::poly::commitment::ResidentMultiopenArena,
+        >,
+    ) -> Result<(), Error>
+    where
+        E::Fr: Sampleable<T::Hash> + Hash + Ord + Hashable<T::Hash>,
+        E::G1: Hashable<T::Hash>,
+    {
         let _timer = crate::perf_timer::ScopedTimer::with_count(
             "proof_server.prover.kzg.multi_open.body",
             Some(prover_query.len()),
@@ -970,9 +1997,12 @@ where
         let x1: E::Fr = transcript.squeeze_challenge();
         let x2: E::Fr = transcript.squeeze_challenge();
 
-        #[cfg(feature = "gpu-blitzar")]
-        let mut resident_multiopen_arena =
-            RESIDENT_MULTIOPEN_ARENA.with(|slot| slot.borrow_mut().take());
+        #[cfg(feature = "gpu-metal")]
+        if let Some(result) =
+            try_metal_resident_multi_open(params, prover_query, transcript, x1, x2)
+        {
+            return result;
+        }
 
         #[cfg(feature = "gpu-blitzar")]
         let (mut poly_map, point_sets, eval_targets) =
@@ -1539,197 +2569,6 @@ where
             || transcript.write(&pi).map_err(|_| Error::OpeningError),
         )
     }
-
-    #[cfg(feature = "gpu-blitzar")]
-    fn multi_open_with_arena<T: Transcript>(
-        params: &Self::Parameters,
-        prover_query: &[ProverQuery<E::Fr>],
-        transcript: &mut T,
-        arena: Option<crate::poly::commitment::ResidentMultiopenArena>,
-    ) -> Result<(), Error>
-    where
-        E::Fr: Sampleable<T::Hash> + Hash + Ord + Hashable<T::Hash>,
-        E::G1: Hashable<T::Hash>,
-    {
-        let Some(arena) = arena else {
-            return Self::multi_open(params, prover_query, transcript);
-        };
-        RESIDENT_MULTIOPEN_ARENA.with(|slot| {
-            assert!(
-                slot.borrow_mut().replace(arena).is_none(),
-                "nested resident multi-open is unsupported"
-            );
-        });
-        let result = Self::multi_open(params, prover_query, transcript);
-        RESIDENT_MULTIOPEN_ARENA.with(|slot| {
-            slot.borrow_mut().take();
-        });
-        result
-    }
-
-    fn multi_prepare<'com, T: Transcript>(
-        verifier_query: &[VerifierQuery<'com, E::Fr, KZGCommitmentScheme<E>>],
-        transcript: &mut T,
-    ) -> Result<DualMSM<E>, Error>
-    where
-        E::Fr: Sampleable<T::Hash> + Ord + Hash + Hashable<T::Hash>,
-        E::G1: 'com + Hashable<T::Hash> + CurveExt<ScalarExt = E::Fr>,
-    {
-        // Refer to the halo2 book for docs:
-        // https://zcash.github.io/halo2/design/proving-system/multipoint-opening.html
-        let x1: E::Fr = transcript.squeeze_challenge();
-        let x2: E::Fr = transcript.squeeze_challenge();
-
-        let (commitment_map, point_sets) = construct_intermediate_sets(verifier_query)?;
-
-        let mut q_coms: Vec<_> = vec![vec![]; point_sets.len()];
-        let mut q_eval_sets = vec![vec![]; point_sets.len()];
-
-        for com_data in commitment_map.into_iter() {
-            let mut msm = MSMKZG::init();
-            let eval_point_opt = if com_data.commitment.is_chopped() {
-                // When the commitment is in chopped form, we require that it be evaluated
-                // in a single point.
-                debug_assert!(com_data.point_indices.len() == 1);
-                Some(point_sets[com_data.set_index][com_data.point_indices[0]])
-            } else {
-                None
-            };
-            for (scalar, commitment) in com_data.commitment.as_terms(eval_point_opt) {
-                msm.append_term(scalar, commitment, com_data.commitment_label.clone());
-            }
-            q_coms[com_data.set_index].push(msm);
-            q_eval_sets[com_data.set_index].push(com_data.evals);
-        }
-
-        let nb_x1_powers = q_coms.iter().map(|v| v.len()).max().unwrap_or(0);
-        assert!(nb_x1_powers >= q_eval_sets.iter().map(|v| v.len()).max().unwrap_or(0));
-
-        #[cfg(feature = "truncated-challenges")]
-        let powers_x1 = truncated_powers(x1).take(nb_x1_powers).collect::<Vec<_>>();
-
-        #[cfg(not(feature = "truncated-challenges"))]
-        let powers_x1 = powers(x1).take(nb_x1_powers).collect::<Vec<_>>();
-
-        let q_coms = q_coms
-            .into_iter()
-            .map(|msms| msm_inner_product(msms, &powers_x1))
-            .collect::<Vec<_>>();
-
-        let q_eval_sets = q_eval_sets
-            .iter()
-            .map(|evals| evals_inner_product(evals, &powers_x1))
-            .collect::<Vec<_>>();
-
-        // Sort point sets by ascending cardinality to ensure the first set is the one
-        // that contains fixed commitments (which are evaluated at x only). This
-        // property is not necessary for the actual proving system, but it is important
-        // for in-circuit verification of proofs. (It enables an optimization based on
-        // an internal collapse.)
-        //
-        // The (len, i) key provides a deterministic total order even when two sets
-        // share the same cardinality.
-        let (q_coms, q_eval_sets, point_sets) = {
-            let mut order: Vec<usize> = (0..point_sets.len()).collect();
-            order.sort_by_key(|&i| (point_sets[i].len(), i));
-            let q_coms: Vec<_> = order.iter().map(|&i| q_coms[i].clone()).collect();
-            let q_eval_sets: Vec<_> = order.iter().map(|&i| q_eval_sets[i].clone()).collect();
-            let point_sets: Vec<_> = order.iter().map(|&i| point_sets[i].clone()).collect();
-            (q_coms, q_eval_sets, point_sets)
-        };
-
-        let f_com: E::G1 = transcript.read().map_err(|_| Error::SamplingError)?;
-
-        // Sample a challenge x_3 for checking that f(X) was committed to
-        // correctly.
-        let x3: E::Fr = transcript.squeeze_challenge();
-        #[cfg(feature = "truncated-challenges")]
-        let x3 = truncate(x3);
-
-        let mut q_evals_on_x3 = Vec::<E::Fr>::with_capacity(q_eval_sets.len());
-        for _ in 0..q_eval_sets.len() {
-            q_evals_on_x3.push(transcript.read().map_err(|_| Error::SamplingError)?);
-        }
-
-        // We can compute the expected msm_eval at x_3 using the u provided
-        // by the prover and from x_2
-        let f_eval = point_sets
-            .iter()
-            .zip(q_eval_sets.iter())
-            .zip(q_evals_on_x3.iter())
-            .rev()
-            .fold(E::Fr::ZERO, |acc_eval, ((points, evals), proof_eval)| {
-                let r_poly = lagrange_interpolate(points, evals);
-                let r_eval = eval_polynomial(&r_poly, x3);
-                // eval = (proof_eval - r_eval) / prod_i (x3 - point_i)
-                let den = points
-                    .iter()
-                    .fold(E::Fr::ONE, |acc, point| acc * &(x3 - point));
-                let eval = (*proof_eval - &r_eval) * den.invert().unwrap();
-                acc_eval * &(x2) + &eval
-            });
-
-        let x4: E::Fr = transcript.squeeze_challenge();
-
-        let final_com = {
-            let size = q_coms.len() + 1;
-            let mut coms = q_coms;
-            let mut f_com_as_msm = MSMKZG::init();
-
-            f_com_as_msm.append_term(E::Fr::ONE, f_com, CommitmentLabel::NoLabel);
-
-            // Collapse all MSMs before combining with x4 powers, to match the
-            // in-circuit verifier. Skip the first one since its x4 power is 1.
-            #[cfg(feature = "truncated-challenges")]
-            coms.iter_mut().skip(1).for_each(MSMKZG::collapse);
-            coms.push(f_com_as_msm);
-
-            #[cfg(feature = "truncated-challenges")]
-            let powers = truncated_powers(x4);
-
-            #[cfg(not(feature = "truncated-challenges"))]
-            let powers = powers(x4);
-
-            msm_inner_product(coms, &powers.take(size).collect::<Vec<_>>())
-        };
-
-        let v = {
-            let mut evals = q_evals_on_x3;
-            evals.push(f_eval);
-
-            #[cfg(feature = "truncated-challenges")]
-            let powers = truncated_powers(x4);
-
-            #[cfg(not(feature = "truncated-challenges"))]
-            let powers = powers(x4);
-
-            inner_product(&evals, powers)
-        };
-
-        let pi: E::G1 = transcript.read().map_err(|_| Error::SamplingError)?;
-
-        let mut pi_msm = MSMKZG::<E>::init();
-        pi_msm.append_term(E::Fr::ONE, pi, CommitmentLabel::Custom("π".into()));
-
-        // Scale zπ - vG
-        let scaled_pi = MSMKZG {
-            scalars: vec![x3, v],
-            bases: vec![pi, -E::G1::generator()],
-            labels: vec![
-                CommitmentLabel::Custom("π".into()),
-                CommitmentLabel::Custom("-G".into()),
-            ],
-        };
-
-        // (π, C − vG + zπ)
-        let mut msm_accumulator = DualMSM {
-            left: pi_msm,
-            right: final_com,
-        };
-        msm_accumulator.right.add_msm(&scaled_pi);
-
-        Ok(msm_accumulator)
-    }
 }
 
 #[cfg(test)]
@@ -1737,8 +2576,10 @@ mod tests {
     use std::hash::Hash;
 
     use blake2b_simd::State as Blake2bState;
-    use ff::WithSmallOrderMulGroup;
-    use midnight_curves::{CurveAffine, CurveExt, pairing::MultiMillerLoop, serde::SerdeObject};
+    use ff::{Field, WithSmallOrderMulGroup};
+    use midnight_curves::{
+        CurveAffine, CurveExt, Fq, pairing::MultiMillerLoop, serde::SerdeObject,
+    };
     use rand_core::OsRng;
 
     use crate::{
@@ -1755,6 +2596,70 @@ mod tests {
         utils::arithmetic::eval_polynomial,
     };
 
+    #[derive(Clone, Copy)]
+    enum MultiOpenEntryPoint {
+        Standard,
+        #[cfg(feature = "gpu-blitzar")]
+        ArenaNone,
+    }
+
+    #[test]
+    fn fused_polynomial_inner_product_matches_coefficient_reference() {
+        let domain = EvaluationDomain::<Fq>::new(1, 4);
+        let polys = (0u64..4)
+            .map(|poly_index| {
+                let mut poly = domain.empty_coeff();
+                for (coefficient, value) in poly.iter_mut().enumerate() {
+                    *value = Fq::from((poly_index + 1) * 100 + coefficient as u64);
+                }
+                poly
+            })
+            .collect::<Vec<_>>();
+        let refs = polys.iter().collect::<Vec<_>>();
+
+        for scalars in [
+            [Fq::ZERO, Fq::ONE, Fq::from(3), Fq::ZERO],
+            [Fq::ONE, Fq::ZERO, Fq::ONE, Fq::from(7)],
+            [Fq::from(5), Fq::from(2), Fq::ZERO, Fq::from(11)],
+        ] {
+            let actual = super::polynomial_inner_product_refs(&refs, &scalars);
+            let mut expected = domain.empty_coeff();
+            for (value, coefficient) in expected.iter_mut().zip(0..) {
+                for (poly, scalar) in polys.iter().zip(scalars) {
+                    *value += poly[coefficient] * scalar;
+                }
+            }
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[cfg(feature = "gpu-metal")]
+    #[test]
+    fn metal_msm_default_window_tracks_measured_density_crossover() {
+        use midnight_gpu_prover::metal::Bls12_381MsmWindow::{FixedW11, FixedW13};
+
+        assert_eq!(
+            super::default_metal_msm_window_for_nonzero(16_384, 10_240),
+            FixedW11
+        );
+        assert_eq!(
+            super::default_metal_msm_window_for_nonzero(16_384, 10_241),
+            FixedW13
+        );
+        assert_eq!(
+            super::default_metal_msm_window_for_nonzero(32_768, 20_480),
+            FixedW11
+        );
+        assert_eq!(
+            super::default_metal_msm_window_for_nonzero(32_768, 20_481),
+            FixedW13
+        );
+        assert_eq!(
+            super::default_metal_msm_window_for_nonzero(32_768, 32_768),
+            FixedW13
+        );
+    }
+
     #[test]
     fn test_roundtrip_gwc() {
         use midnight_curves::Bls12;
@@ -1769,6 +2674,33 @@ mod tests {
         verify::<Bls12, CircuitTranscript<Blake2bState>>(&verifier_params, &proof[..], false);
 
         verify::<Bls12, CircuitTranscript<Blake2bState>>(&verifier_params, &proof[..], true);
+    }
+
+    #[cfg(feature = "gpu-blitzar")]
+    #[test]
+    fn test_multi_open_with_arena_none_matches_multi_open() {
+        use midnight_curves::Bls12;
+
+        const K: u32 = 4;
+
+        let params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(K, OsRng);
+        let standard = create_proof_with_entry_point::<_, CircuitTranscript<Blake2bState>>(
+            &params,
+            MultiOpenEntryPoint::Standard,
+        );
+        let arena_none = create_proof_with_entry_point::<_, CircuitTranscript<Blake2bState>>(
+            &params,
+            MultiOpenEntryPoint::ArenaNone,
+        );
+
+        assert_eq!(arena_none, standard);
+    }
+
+    #[cfg(feature = "cuda-resident-multiopen-test-support")]
+    #[test]
+    #[ignore = "requires a CUDA device and the sppark resident multi-open pipeline"]
+    fn test_multi_open_with_resident_arena_matches_and_is_error_isolated() {
+        super::assert_resident_multiopen_ownership_error_isolation();
     }
 
     fn verify<E, T>(verifier_params: &ParamsVerifierKZG<E>, proof: &[u8], should_fail: bool)
@@ -1828,6 +2760,20 @@ mod tests {
         E::G1: Hashable<T::Hash> + CurveExt<ScalarExt = E::Fr, AffineExt = E::G1Affine>,
         E::G1Affine: SerdeObject + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
     {
+        create_proof_with_entry_point::<E, T>(kzg_params, MultiOpenEntryPoint::Standard)
+    }
+
+    fn create_proof_with_entry_point<E, T>(
+        kzg_params: &ParamsKZG<E>,
+        entry_point: MultiOpenEntryPoint,
+    ) -> Vec<u8>
+    where
+        E: MultiMillerLoop,
+        T: Transcript,
+        E::Fr: WithSmallOrderMulGroup<3> + Hashable<T::Hash> + Hash + Sampleable<T::Hash> + Ord,
+        E::G1: Hashable<T::Hash> + CurveExt<ScalarExt = E::Fr, AffineExt = E::G1Affine>,
+        E::G1Affine: SerdeObject + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
+    {
         let k = (kzg_params.g.len() - 1).ilog2() + 1;
         let domain = EvaluationDomain::new(1, k);
 
@@ -1867,7 +2813,7 @@ mod tests {
         transcript.write(&bvx).unwrap();
         transcript.write(&cvy).unwrap();
 
-        let queries = [
+        let queries = vec![
             ProverQuery {
                 point: x,
                 poly: &ax,
@@ -1880,11 +2826,21 @@ mod tests {
                 point: y,
                 poly: &cx,
             },
-        ]
-        .into_iter();
+        ];
 
-        KZGCommitmentScheme::multi_open(kzg_params, &queries.collect::<Vec<_>>(), &mut transcript)
-            .unwrap();
+        match entry_point {
+            MultiOpenEntryPoint::Standard => {
+                KZGCommitmentScheme::multi_open(kzg_params, &queries, &mut transcript)
+            }
+            #[cfg(feature = "gpu-blitzar")]
+            MultiOpenEntryPoint::ArenaNone => KZGCommitmentScheme::multi_open_with_arena(
+                kzg_params,
+                &queries,
+                &mut transcript,
+                None,
+            ),
+        }
+        .unwrap();
 
         transcript.finalize()
     }

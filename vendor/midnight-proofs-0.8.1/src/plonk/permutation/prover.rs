@@ -416,17 +416,20 @@ impl Argument {
             crate::perf_timer::timed_count(
                 "proof_server.prover.plonk.permutation.batch_invert",
                 modified_values.len(),
-                || {
+                || -> Result<(), Error> {
                     #[cfg(feature = "gpu-blitzar")]
                     if midnight_curves::gpu_sppark::try_bls12_381_fr_invert_assign(
                         &mut modified_values,
-                    ) {
-                        return;
+                    )
+                    .map_err(|error| Error::Backend(error.to_string()))?
+                    {
+                        return Ok(());
                     }
 
                     modified_values.batch_invert();
+                    Ok(())
                 },
-            );
+            )?;
 
             // Iterate over each column again, this time finishing the computation
             // of the entire fraction by computing the numerators
@@ -473,7 +476,7 @@ impl Argument {
             let z_values = crate::perf_timer::timed_count(
                 "proof_server.prover.plonk.permutation.prefix_product",
                 modified_values.len(),
-                || {
+                || -> Result<Vec<F>, Error> {
                     #[cfg(feature = "gpu-blitzar")]
                     let mut values = modified_values;
                     #[cfg(not(feature = "gpu-blitzar"))]
@@ -482,17 +485,19 @@ impl Argument {
                     if midnight_curves::gpu_sppark::try_bls12_381_fr_shifted_prefix_product(
                         &mut values,
                         last_z,
-                    ) {
-                        values
+                    )
+                    .map_err(|error| Error::Backend(error.to_string()))?
+                    {
+                        Ok(values)
                     } else {
-                        shifted_prefix_product(values, last_z)
+                        Ok(shifted_prefix_product(values, last_z))
                     }
                     #[cfg(not(feature = "gpu-blitzar"))]
                     {
-                        shifted_prefix_product(values, last_z)
+                        Ok(shifted_prefix_product(values, last_z))
                     }
                 },
-            );
+            )?;
             let mut z = domain.lagrange_from_vec(z_values);
             // Set blinding factors
             crate::perf_timer::timed_count(

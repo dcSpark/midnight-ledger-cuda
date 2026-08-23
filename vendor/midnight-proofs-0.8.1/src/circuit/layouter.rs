@@ -100,7 +100,10 @@ pub trait RegionLayouter<F: Field>: fmt::Debug + SyncDeps {
             return Err(Error::BoundsFailure);
         }
         let cells = self.assign_advice_field_batch(assignments)?;
-        Ok(cells.into_iter().skip(assignments.len() - tail_count).collect())
+        Ok(cells
+            .into_iter()
+            .skip(assignments.len() - tail_count)
+            .collect())
     }
 
     /// Assign values against a reusable layout and retain only the final cells.

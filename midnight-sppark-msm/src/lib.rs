@@ -529,6 +529,8 @@ enum TransferOp {
     TraceContextPermutation,
     TraceLookupProducts,
     TraceLookupPermute,
+    FrDeviceVecGather,
+    FrPoseidonAdviceFromWitness,
 }
 
 impl TransferOp {
@@ -567,11 +569,24 @@ impl TransferOp {
             Self::TraceContextPermutation => 30,
             Self::TraceLookupProducts => 31,
             Self::TraceLookupPermute => 32,
+            Self::FrDeviceVecGather => 33,
+            Self::FrPoseidonAdviceFromWitness => 34,
         }
+    }
+
+    fn counts_as_compute(self) -> bool {
+        !matches!(
+            self,
+            Self::MsmContextCreate
+                | Self::FrDeviceVecUpload
+                | Self::FrDeviceVecDownload
+                | Self::NumeratorContextCreate
+                | Self::FrDeviceVecGather
+        )
     }
 }
 
-const TRANSFER_OP_NAMES: [&str; 33] = [
+const TRANSFER_OP_NAMES: [&str; 35] = [
     "msm_context_create",
     "msm_context_batch",
     "msm",
@@ -605,6 +620,8 @@ const TRANSFER_OP_NAMES: [&str; 33] = [
     "trace_context_permutation",
     "trace_lookup_products",
     "trace_lookup_permute",
+    "fr_device_vec_gather",
+    "fr_poseidon_advice_from_witness",
 ];
 
 struct TransferBucketState {
@@ -614,6 +631,21 @@ struct TransferBucketState {
 
 static H2D_BYTES: AtomicU64 = AtomicU64::new(0);
 static D2H_BYTES: AtomicU64 = AtomicU64::new(0);
+static NATIVE_CALLS: AtomicU64 = AtomicU64::new(0);
+static COMPUTE_CALLS: AtomicU64 = AtomicU64::new(0);
+static FALLBACKS: AtomicU64 = AtomicU64::new(0);
+
+/// Native CUDA adapter activity observed within one benchmark sample.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AcceleratorActivityCounters {
+    /// Calls that attempted to cross from Rust into a native operation.
+    pub native_calls: u64,
+    /// Native calls that execute proof arithmetic rather than only move or
+    /// prepare data.
+    pub compute_calls: u64,
+    /// Eligible native operations that failed and explicitly continued on CPU.
+    pub fallbacks: u64,
+}
 
 pub fn reset_transfer_counters() {
     H2D_BYTES.store(0, Ordering::Relaxed);
@@ -622,6 +654,43 @@ pub fn reset_transfer_counters() {
         bucket.h2d.store(0, Ordering::Relaxed);
         bucket.d2h.store(0, Ordering::Relaxed);
     }
+}
+
+/// Resets transfer and execution counters at a proof-sample boundary.
+pub fn reset_accelerator_activity_counters() {
+    reset_transfer_counters();
+    NATIVE_CALLS.store(0, Ordering::Relaxed);
+    COMPUTE_CALLS.store(0, Ordering::Relaxed);
+    FALLBACKS.store(0, Ordering::Relaxed);
+}
+
+/// Returns native execution and explicit fallback activity for the sample.
+pub fn accelerator_activity_counters() -> AcceleratorActivityCounters {
+    AcceleratorActivityCounters {
+        native_calls: NATIVE_CALLS.load(Ordering::Relaxed),
+        compute_calls: COMPUTE_CALLS.load(Ordering::Relaxed),
+        fallbacks: FALLBACKS.load(Ordering::Relaxed),
+    }
+}
+
+/// Records an eligible CUDA operation that explicitly continued on CPU.
+///
+/// This is public only so the patched proof and curve adapters can account for
+/// their intentional `Result`-to-CPU fallback seams in the same process-wide
+/// sample counter.
+#[doc(hidden)]
+pub fn record_accelerator_fallback() {
+    FALLBACKS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Records a native compute call implemented outside the sppark wrapper.
+///
+/// The legacy Blitzar MSM adapter uses this bridge so proof benchmarks cannot
+/// confuse an external native compute path with CPU execution.
+#[doc(hidden)]
+pub fn record_external_accelerator_compute_call() {
+    NATIVE_CALLS.fetch_add(1, Ordering::Relaxed);
+    COMPUTE_CALLS.fetch_add(1, Ordering::Relaxed);
 }
 
 pub fn transfer_counters() -> TransferCounters {
@@ -652,6 +721,14 @@ fn record_d2h(bytes: usize) {
 }
 
 fn record_transfer(op: TransferOp, h2d_bytes: usize, d2h_bytes: usize) {
+    NATIVE_CALLS.fetch_add(1, Ordering::Relaxed);
+    if op.counts_as_compute() {
+        COMPUTE_CALLS.fetch_add(1, Ordering::Relaxed);
+    }
+    record_transfer_bytes(op, h2d_bytes, d2h_bytes);
+}
+
+fn record_transfer_bytes(op: TransferOp, h2d_bytes: usize, d2h_bytes: usize) {
     record_h2d(h2d_bytes);
     record_d2h(d2h_bytes);
     let bucket = &transfer_bucket_state()[op.index()];
@@ -1637,7 +1714,7 @@ impl Bls12_381FrDeviceVec {
 
         let lock = maybe_gpu_msm_lock()?;
         record_transfer(
-            TransferOp::FrDeviceVecUpload,
+            TransferOp::FrPoseidonAdviceFromWitness,
             slice_bytes::<Bls12_381Fr>(witness.len() + metadata.len())
                 + slice_bytes::<u16>(layout.len()),
             0,
@@ -1787,6 +1864,11 @@ impl Bls12_381FrDeviceVec {
             });
         }
         let lock = maybe_gpu_msm_lock()?;
+        record_transfer(
+            TransferOp::FrDeviceVecGather,
+            slice_bytes::<u32>(indices.len()),
+            0,
+        );
         let mut raw = std::ptr::null_mut();
         let status = unsafe {
             midnight_sppark_bls12_381_fr_device_vec_gather_polys(
@@ -1979,6 +2061,7 @@ impl Bls12_381FrDeviceVec {
         let mut starts = vec![0usize; count];
         let mut values = Vec::<Bls12_381Fr>::with_capacity(capacity);
         let mut written = 0usize;
+        record_transfer(TransferOp::FrDeviceVecDownload, 0, 0);
         let status = unsafe {
             midnight_sppark_bls12_381_fr_device_vec_download_nonzero_suffixes(
                 values.as_mut_ptr(),
@@ -2005,7 +2088,7 @@ impl Bls12_381FrDeviceVec {
         unsafe {
             values.set_len(written);
         }
-        record_transfer(
+        record_transfer_bytes(
             TransferOp::FrDeviceVecDownload,
             0,
             slice_bytes::<usize>(starts.len()) + slice_bytes::<Bls12_381Fr>(values.len()),
@@ -2042,6 +2125,11 @@ impl Bls12_381FrDeviceVec {
         let mut starts = vec![0usize; count];
         let mut nonzero_counts = vec![0usize; count];
         let mut suffix_len = 0usize;
+        record_transfer(
+            TransferOp::FrDeviceVecDownload,
+            0,
+            slice_bytes::<usize>(starts.len() + nonzero_counts.len()),
+        );
         let status = unsafe {
             midnight_sppark_bls12_381_fr_device_vec_download_nonzero_suffixes(
                 std::ptr::null_mut(),
@@ -2070,11 +2158,6 @@ impl Bls12_381FrDeviceVec {
                 "sppark returned invalid nonzero suffix starts".to_string(),
             ));
         }
-        record_transfer(
-            TransferOp::FrDeviceVecDownload,
-            0,
-            slice_bytes::<usize>(starts.len() + nonzero_counts.len()),
-        );
         Ok((starts, nonzero_counts))
     }
 
@@ -2960,6 +3043,11 @@ pub fn bls12_381_g1_msm_context_with_config(
 
     let scramble_mask = deterministic_msm_scramble_mask(points.len());
     let mut scramble_correction = Bls12_381G1Projective::default();
+    record_transfer(
+        TransferOp::MsmContextBatch,
+        slice_bytes::<Bls12_381Fr>(scramble_mask.len()),
+        size_of::<Bls12_381G1Projective>(),
+    );
     let status = unsafe {
         midnight_sppark_bls12_381_g1_msm_context_batch(
             &mut scramble_correction,
@@ -5029,12 +5117,9 @@ mod tests {
                 .map(|batch| {
                     (0..len)
                         .map(|idx| {
-                            Fq::from(
-                                ((idx * 29 + batch * 43 + round * 71 + 11) % 65521 + 1)
-                                    as u64,
-                            )
-                            .invert()
-                            .unwrap()
+                            Fq::from(((idx * 29 + batch * 43 + round * 71 + 11) % 65521 + 1) as u64)
+                                .invert()
+                                .unwrap()
                         })
                         .collect::<Vec<_>>()
                 })
@@ -5046,13 +5131,9 @@ mod tests {
                 .map(raw_from_fq)
                 .collect::<Vec<_>>();
             let device = Bls12_381FrDeviceVec::upload(&raw_scalars).unwrap();
-            let actual = bls12_381_g1_msm_context_device_scrambled_batch(
-                &context,
-                &device,
-                0,
-                batch_count,
-            )
-            .unwrap();
+            let actual =
+                bls12_381_g1_msm_context_device_scrambled_batch(&context, &device, 0, batch_count)
+                    .unwrap();
 
             for (batch, (actual, scalars)) in actual.iter().zip(&scalar_batches).enumerate() {
                 let expected = G1Projective::multi_exp(&points, scalars);

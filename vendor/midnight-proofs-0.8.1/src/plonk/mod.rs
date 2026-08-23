@@ -33,6 +33,17 @@ pub(crate) mod evaluation;
 mod keygen;
 pub(crate) mod lookup;
 pub mod permutation;
+#[cfg(feature = "gpu-resident")]
+mod resident_key;
+#[cfg(all(
+    any(
+        feature = "metal-resident-quotient-test-support",
+        feature = "metal-resident-quotient-diagnostic"
+    ),
+    target_os = "macos",
+    target_arch = "aarch64"
+))]
+mod resident_quotient_test_support;
 pub(crate) mod traces;
 pub(crate) mod trash;
 pub(crate) mod vanishing;
@@ -43,7 +54,7 @@ pub mod bench;
 mod prover;
 mod verifier;
 
-#[cfg(feature = "gpu-blitzar")]
+#[cfg(any(feature = "gpu-blitzar", feature = "gpu-resident"))]
 use std::sync::{Arc, OnceLock};
 use std::{io, iter};
 
@@ -57,6 +68,13 @@ pub use prover::*;
 pub use verifier::*;
 
 use crate::poly::commitment::PolynomialCommitmentScheme;
+
+/// Runs the backend-neutral expression compiler regression used by downstream CI.
+#[cfg(feature = "gpu-resident-graph-test-support")]
+#[doc(hidden)]
+pub fn resident_graph_compiler_regression() -> Result<(), String> {
+    evaluation::resident_graph_compiler_regression()
+}
 
 #[cfg(feature = "gpu-blitzar")]
 #[derive(Clone, Copy)]
@@ -457,6 +475,9 @@ pub struct ProvingKey<F: PrimeField, CS: PolynomialCommitmentScheme<F>> {
     #[cfg(feature = "gpu-blitzar")]
     sppark_numerator_contexts:
         Arc<Vec<OnceLock<Result<Arc<evaluation::SpparkResidentNumeratorContext>, String>>>>,
+    #[cfg(feature = "gpu-resident")]
+    prepared_resident_key:
+        Arc<OnceLock<Result<Arc<midnight_gpu_prover::PreparedResidentProvingKey>, String>>>,
 }
 
 impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> ProvingKey<F, CS>
@@ -554,6 +575,8 @@ where
                     .map(|_| OnceLock::new())
                     .collect(),
             ),
+            #[cfg(feature = "gpu-resident")]
+            prepared_resident_key: Arc::new(OnceLock::new()),
         })
     }
 

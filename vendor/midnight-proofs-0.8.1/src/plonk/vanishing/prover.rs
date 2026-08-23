@@ -219,6 +219,30 @@ impl<F: WithSmallOrderMulGroup<3>> Committed<F> {
         })
     }
 
+    /// Continues after a backend has committed and transcript-bound quotient limbs.
+    ///
+    /// The supplied coefficients are their challenge-dependent opening
+    /// combination. This method deliberately performs no commitment, RNG, or
+    /// second quotient-piece Horner pass.
+    pub(crate) fn construct_from_precommitted_h_poly(
+        self,
+        domain: &EvaluationDomain<F>,
+        coefficients: Vec<F>,
+    ) -> Result<Constructed<F>, Error> {
+        let piece_len = domain.n as usize;
+        if coefficients.len() != piece_len {
+            return Err(Error::Backend(
+                "precombined quotient opening does not match the proof domain".into(),
+            ));
+        }
+        Ok(Constructed {
+            h_pieces: vec![domain.coeff_from_vec(coefficients)],
+            #[cfg(feature = "gpu-blitzar")]
+            resident_h_pieces: None,
+            committed: self,
+        })
+    }
+
     #[cfg(feature = "gpu-blitzar")]
     pub(crate) fn construct_from_resident_coefficients<
         CS: PolynomialCommitmentScheme<F>,
