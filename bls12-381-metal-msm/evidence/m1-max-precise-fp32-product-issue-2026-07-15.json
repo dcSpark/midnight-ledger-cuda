@@ -1,0 +1,100 @@
+{
+  "schema": "bls12-381-metal-msm.product-issue-gate.v1",
+  "status": "no_go_for_tested_schedule",
+  "measurement_scope": "raw_precise_fp32_product_issue_only",
+  "cryptographic_operations_measured": 0,
+  "candidate": {
+    "name": "carry-normalized-radix-4096-four-level-karatsuba",
+    "tested_schedule": "8-independent-float4-fma-chains",
+    "scalar_products_per_convolution": 647,
+    "convolutions_per_complete_montgomery_fp": 3,
+    "scalar_products_per_complete_montgomery_fp": 1941
+  },
+  "device": {
+    "name": "Apple M1 Max",
+    "registry_id": 4294970105,
+    "hardware_model": "MacBookPro18,2",
+    "memory_bytes": 68719476736,
+    "thread_execution_width": 32,
+    "max_threads_per_threadgroup": 1024,
+    "selected_threads_per_threadgroup": 64
+  },
+  "toolchain": {
+    "rustc": "1.95.0 (59807616e 2026-04-14)",
+    "llvm": "22.1.2",
+    "metal": "Apple metal version 32023.883 (metalfe-32023.883)",
+    "macos": "26.5.2 (25F84)",
+    "compile_flags": [
+      "-std=metal3.0",
+      "-mmacosx-version-min=13.0",
+      "-fno-fast-math",
+      "-fmetal-math-mode=safe",
+      "-fmetal-math-fp32-functions=precise",
+      "-ffp-contract=on"
+    ],
+    "metallib_sha256": "6af2b1716e0cab3f0b61f4f2b725c779f04f37ad6d54ae8843f0843e56e2d59e"
+  },
+  "protocol": {
+    "command": "BLS12_381_METAL_MSM_GATE_SCOUT_SAMPLES=1 CARGO_INCREMENTAL=0 cargo +1.95.0 test --release --features metal-diagnostics metal_diagnostic::report_precise_fp32_product_issue_gate -- --ignored --nocapture --test-threads=1",
+    "elements": 262144,
+    "iterations": 256,
+    "scalar_products_per_iteration": 32,
+    "dispatches_per_command": 4,
+    "commands_per_sample": 1,
+    "waits_per_sample": 1,
+    "warmups": 2,
+    "samples": 20,
+    "scout_samples_per_threadgroup_width": 1,
+    "p5_estimator": "nearest-rank, recomputed after the run from the frozen raw samples",
+    "historical_runner_p5_estimator": "floor-index selection rates[n*5/100], which selected the second-smallest sample for n=20",
+    "historical_runner_p5_raw_products_per_second": 1839337189475.656,
+    "allocation_upload_readback_in_timed_interval": false,
+    "abi_probe_passed": true,
+    "bit_exact_oracle_passed": true,
+    "oracle_indices_checked": [0],
+    "current_harness_oracle_indices_checked_on_rerun": [0, 1, 16, 17, 131072, 262143],
+    "source_revision_note": "The frozen historical run checked output index 0. The retained harness now checks six deterministic indices; rerunning the command reproduces the performance workload with the stronger oracle, not the historical oracle scope.",
+    "compiler_register_or_spill_metadata_recorded": false
+  },
+  "gates": {
+    "median_product_count_equivalents_per_second": 2400000000,
+    "p5_product_count_equivalents_per_second": 2250000000,
+    "median_raw_products_per_second": 4658400000000,
+    "p5_raw_products_per_second": 4367250000000
+  },
+  "summary": {
+    "median_raw_products_per_second": 1945454089253.589,
+    "p5_raw_products_per_second": 1827159711140.654,
+    "median_product_count_equivalents_per_second": 1002294739.440,
+    "p5_product_count_equivalents_per_second": 941349670.861,
+    "median_wall_ms": 4.739979,
+    "decision": "no_go_for_tested_schedule"
+  },
+  "limitations": [
+    "This result is not an upper bound over every possible FP32 instruction schedule.",
+    "The historical run used one scout sample per threadgroup width and did not capture compiler register or spill metadata.",
+    "Product-count equivalents are not completed Montgomery field operations."
+  ],
+  "samples": [
+    { "index": 0, "gpu_ms": 4.316625, "wall_ms": 4.637208, "raw_products_per_second": 1989965445689.630 },
+    { "index": 1, "gpu_ms": 4.322667, "wall_ms": 4.603083, "raw_products_per_second": 1987183975078.349 },
+    { "index": 2, "gpu_ms": 4.638292, "wall_ms": 4.942417, "raw_products_per_second": 1851960720023.664 },
+    { "index": 3, "gpu_ms": 4.305583, "wall_ms": 4.586708, "raw_products_per_second": 1995068865702.972 },
+    { "index": 4, "gpu_ms": 4.701250, "wall_ms": 4.985833, "raw_products_per_second": 1827159711140.654 },
+    { "index": 5, "gpu_ms": 4.304833, "wall_ms": 4.615125, "raw_products_per_second": 1995416452159.700 },
+    { "index": 6, "gpu_ms": 4.462250, "wall_ms": 4.721208, "raw_products_per_second": 1925023159168.581 },
+    { "index": 7, "gpu_ms": 4.305542, "wall_ms": 4.576250, "raw_products_per_second": 1995087863966.952 },
+    { "index": 8, "gpu_ms": 4.628500, "wall_ms": 4.873834, "raw_products_per_second": 1855878706276.332 },
+    { "index": 9, "gpu_ms": 4.304750, "wall_ms": 4.559834, "raw_products_per_second": 1995454925837.737 },
+    { "index": 10, "gpu_ms": 4.625500, "wall_ms": 5.037500, "raw_products_per_second": 1857082389363.312 },
+    { "index": 11, "gpu_ms": 4.670125, "wall_ms": 4.957084, "raw_products_per_second": 1839337189475.656 },
+    { "index": 12, "gpu_ms": 4.369500, "wall_ms": 4.704375, "raw_products_per_second": 1965885019338.597 },
+    { "index": 13, "gpu_ms": 4.306375, "wall_ms": 4.640084, "raw_products_per_second": 1994701945836.115 },
+    { "index": 14, "gpu_ms": 4.305000, "wall_ms": 4.596833, "raw_products_per_second": 1995339045760.743 },
+    { "index": 15, "gpu_ms": 4.653375, "wall_ms": 4.960250, "raw_products_per_second": 1845957953528.353 },
+    { "index": 16, "gpu_ms": 4.619750, "wall_ms": 4.959708, "raw_products_per_second": 1859393818280.210 },
+    { "index": 17, "gpu_ms": 4.305417, "wall_ms": 4.758750, "raw_products_per_second": 1995145787736.705 },
+    { "index": 18, "gpu_ms": 4.629750, "wall_ms": 4.988917, "raw_products_per_second": 1855377632053.567 },
+    { "index": 19, "gpu_ms": 4.619250, "wall_ms": 4.879209, "raw_products_per_second": 1859595084050.441 }
+  ]
+}

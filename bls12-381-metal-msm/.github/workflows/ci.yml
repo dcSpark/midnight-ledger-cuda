@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  portable:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        toolchain: ["1.95.0", stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: clippy,rustfmt
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all-targets
+      - run: cargo doc --no-deps
+      - run: cargo package --allow-dirty
+
+  apple-metal-compile:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+          targets: aarch64-apple-darwin
+      - run: >-
+          cargo check --release --tests --target aarch64-apple-darwin
+          --features metal-diagnostics
+
+  # Executable releases must add a required, provisioned physical Apple-GPU job.
+  # Hosted compilation is not accepted as correctness or performance evidence.

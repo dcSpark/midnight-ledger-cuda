@@ -1,0 +1,132 @@
+{
+  "schema": "bls12-381-metal-msm.u32-low-limb-product-gate.v1",
+  "status": "tested_schedule_no_go",
+  "measurement_scope": "observable_wrapping_u32_product_issue_for_tested_reference_schedule",
+  "candidate": {
+    "name": "radix-2^13-30-limb-CIOS",
+    "limbs": 30,
+    "limb_bits": 13,
+    "montgomery_radix_bits": 390,
+    "operand_products": 900,
+    "modulus_correction_terms": 900,
+    "low_digit_inverse_steps": 30,
+    "low_digit_inverse_native_products_counted": 0,
+    "reference_mathematical_products_per_complete_multiply": 1800,
+    "modulus_low_limb": 2731,
+    "negative_inverse_mod_8192": 8189,
+    "inverse_check_mod_8192": 8191,
+    "inverse_strength_reduction": "n0_prime is -3 modulo 8192, so q can use shifts, adds, negation, and a mask"
+  },
+  "operation_definition": {
+    "kernel_products_per_iteration": 32,
+    "kernel_adds_per_iteration": 32,
+    "arithmetic": "eight observable uint4 wrapping multiply-add chains per physical thread",
+    "counted_rate": "mathematical scalar u32 products, not vector instructions or FLOPs",
+    "candidate_equivalent": "raw_products_per_second / 1800; this is a tested reference-schedule equivalent, not complete Fp throughput or a hardware ceiling"
+  },
+  "device": {
+    "name": "Apple M1 Max",
+    "registry_id": 4294970105,
+    "hardware_model": "MacBookPro18,2",
+    "memory_bytes": 68719476736,
+    "thread_execution_width": 32,
+    "max_threads_per_threadgroup": 1024,
+    "selected_threads_per_threadgroup": 128
+  },
+  "toolchain": {
+    "rustc": "1.95.0 (59807616e 2026-04-14)",
+    "llvm": "22.1.2",
+    "metal": "Apple metal version 32023.883 (metalfe-32023.883)",
+    "macos": "26.5.2 (25F84)",
+    "air_sha256": "44c717d5186e3b9088e70363d6789016fd24396b684f3706d42c19be9816e211",
+    "metallib_sha256": "217ab2c547441427b24812dfbcfcbddb018ded42ae2ca5d890140c4dd5a8522f",
+    "source_hashes": {
+      "product_issue_metal": "b097570fa0c42df3e062e526d87007f3db6c95a1cfc439acd59658a801590396",
+      "metal_diagnostic_rs": "2061019ee058a10360f175cf539335d5c7dc53ccd644f68dfd05a9a216d77575",
+      "metal_diagnostic_sys_rs": "d7a942053ac15a30ec55bd5a66fd84cfe56b4f053bb9f437aa4accd65d35bb8b"
+    },
+    "abi_fingerprint": "0xa51330b19d22e047",
+    "optimized_air_audit": {
+      "scope": "bls12_381_metal_msm_u32_low_limb_product_issue",
+      "basic_blocks": 8,
+      "branches": 7,
+      "vector_u32_mul_operations_in_loop": 8,
+      "scalar_products_represented_per_loop": 32,
+      "vector_u32_add_operations_in_loop": 8,
+      "scalar_adds_represented_per_loop": 32,
+      "compiler_eliminated_or_reused_counted_products": false,
+      "interpretation": "optimized AIR IR, not final Apple GPU ISA or register allocation"
+    }
+  },
+  "formal_protocol": {
+    "command": "CARGO_INCREMENTAL=0 cargo +1.95 test --manifest-path bls12-381-metal-msm/Cargo.toml --features metal-diagnostics report_u32_low_limb_product_issue_gate --release -- --ignored --nocapture --test-threads=1",
+    "elements": 262144,
+    "iterations": 256,
+    "dispatches_per_command": 4,
+    "raw_products_per_sample": 8589934592,
+    "commands_per_sample": 1,
+    "waits_per_sample": 1,
+    "candidate_widths": [32, 64, 128, 256, 512, 1024],
+    "scout_samples_per_width": 3,
+    "selected_width": 128,
+    "decision_warmups": 2,
+    "decision_samples": 20,
+    "p5_estimator": "nearest-rank",
+    "gpu_timestamp_is_gate_clock": true,
+    "allocations_uploads_and_oracle_reads_in_timed_interval": false
+  },
+  "correctness": {
+    "abi_probe_passed": true,
+    "oracle": "Rust wrapping-u32 recurrence",
+    "oracle_indices_per_sample": 6,
+    "oracle_checked_after_every_decision_command": true,
+    "decision_commands_checked": 20,
+    "optimized_air_product_count_audited": true
+  },
+  "gates": {
+    "median_complete_fp_per_second": 2000000000,
+    "p5_complete_fp_per_second": 1800000000,
+    "required_median_raw_products_per_second": 3600000000000,
+    "required_p5_raw_products_per_second": 3240000000000
+  },
+  "formal_summary": {
+    "median_gpu_raw_products_per_second": 1900899837349.835,
+    "p5_gpu_raw_products_per_second": 1822507737124.065,
+    "median_wall_raw_products_per_second": 1748855282161.041,
+    "p5_wall_raw_products_per_second": 1594172631466.424,
+    "median_reference_schedule_equivalents_per_second": 1056055465.194,
+    "p5_reference_schedule_equivalents_per_second": 1012504298.402,
+    "median_fraction_of_gate": 0.5280277326,
+    "p5_fraction_of_gate": 0.5625023880,
+    "decision": "tested_schedule_no_go"
+  },
+  "formal_samples": [
+    { "index": 0, "gpu_ns": 4634667, "wall_ns": 4969542 },
+    { "index": 1, "gpu_ns": 4318125, "wall_ns": 4654375 },
+    { "index": 2, "gpu_ns": 4643625, "wall_ns": 4976666 },
+    { "index": 3, "gpu_ns": 4317292, "wall_ns": 4664209 },
+    { "index": 4, "gpu_ns": 4631292, "wall_ns": 4944208 },
+    { "index": 5, "gpu_ns": 4316917, "wall_ns": 4642792 },
+    { "index": 6, "gpu_ns": 4318583, "wall_ns": 5388334 },
+    { "index": 7, "gpu_ns": 4647333, "wall_ns": 5034792 },
+    { "index": 8, "gpu_ns": 4657792, "wall_ns": 4925250 },
+    { "index": 9, "gpu_ns": 4404458, "wall_ns": 4679667 },
+    { "index": 10, "gpu_ns": 4674042, "wall_ns": 4963917 },
+    { "index": 11, "gpu_ns": 4411792, "wall_ns": 4682500 },
+    { "index": 12, "gpu_ns": 4713250, "wall_ns": 4956500 },
+    { "index": 13, "gpu_ns": 4322375, "wall_ns": 4586084 },
+    { "index": 14, "gpu_ns": 4352750, "wall_ns": 4687208 },
+    { "index": 15, "gpu_ns": 4316583, "wall_ns": 4591500 },
+    { "index": 16, "gpu_ns": 4632583, "wall_ns": 4908208 },
+    { "index": 17, "gpu_ns": 4650208, "wall_ns": 4986292 },
+    { "index": 18, "gpu_ns": 4318292, "wall_ns": 4623916 },
+    { "index": 19, "gpu_ns": 4641375, "wall_ns": 4915291 }
+  ],
+  "limitations": [
+    "The probe measures a favorable raw multiply-add issue schedule, not Montgomery carry propagation, reduction, field correctness, G1, or MSM.",
+    "The 1.056B/1.013B values are equivalents for the declared 1800-product reference schedule, not complete-field throughput or a hardware upper bound.",
+    "The 30 inverse steps are strength-reduced because n0_prime is -3 modulo 8192, and constant modulus products may have other compiler mappings.",
+    "The result closes this concrete 30x13 product-issue schedule on this M1 Max, not every possible instruction mapping. A different mapping or subquadratic multiplier needs its own bound.",
+    "The result is schedule- and hardware-specific, not a universal limit for future Apple GPUs."
+  ]
+}

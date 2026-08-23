@@ -1,0 +1,394 @@
+{
+  "schema": "bls12-381-metal-msm.blocked128-karatsuba-l4-field-gate.v1",
+  "status": "no_go",
+  "measurement_scope": "complete_lazy_l4_montgomery_redc_rotating_operands",
+  "algorithm": {
+    "name": "generated-blocked-radix128-subtractive-karatsuba-l4-redc",
+    "version": 3,
+    "limbs": 12,
+    "limb_bits": 32,
+    "block_limbs": 4,
+    "rounds": 3,
+    "accumulator_limbs": 16,
+    "input_range": "[0, 4p)",
+    "output_raw_bound": "< 3p",
+    "base_products_per_k4": 9,
+    "base_products_per_round": 63,
+    "base_products_per_redc": 189,
+    "schedule_fingerprint_fnv1a64": "0x0ead48b66cf3f532",
+    "abi_fingerprint": "0x98e696de1bd11618",
+    "source_runtime_recursion": 0,
+    "source_dynamic_subscripts": 0,
+    "source_private_arrays": 0,
+    "source_simd_shuffles": 0,
+    "source_threadgroup_scratch_bytes": 0
+  },
+  "device": {
+    "name": "Apple M1 Max",
+    "gpu_cores": 32,
+    "registry_id": 4294970105,
+    "hardware_model": "MacBookPro18,2",
+    "memory_bytes": 68719476736,
+    "thread_execution_width": 32,
+    "max_threads_per_threadgroup": 512,
+    "selected_threads_per_threadgroup": 64
+  },
+  "toolchain": {
+    "rustc": "1.95.0 (59807616e 2026-04-14)",
+    "llvm": "22.1.2",
+    "metal": "Apple metal version 32023.883 (metalfe-32023.883)",
+    "macos": "26.5.2 (25F84)",
+    "compile_flags": [
+      "-std=metal3.0",
+      "-mmacosx-version-min=13.0",
+      "-fno-fast-math",
+      "-fmetal-math-mode=safe",
+      "-fmetal-math-fp32-functions=precise",
+      "-ffp-contract=on"
+    ],
+    "release_out_dir": "target/release/build/bls12-381-metal-msm-208f819c16d2c1ce/out",
+    "release_artifacts_rebuilt_at_local": "2026-07-16T01:32:55-05:00",
+    "generated_schedule_sha256": "14bca956d56fbeebe0faed78f4f7084201c1bd75c499eb634894895740b46a5f",
+    "generated_constants_metal_sha256": "11b14bce29893834ac06397e334ffb2e47fe4abef85746866a13286bf6bfdf1a",
+    "generated_constants_rust_sha256": "4d33b3bf6453a31217c2d6a4ef74f19cd89aeb665a44a0d0566c26b00d85c244",
+    "air_sha256": "ceed40458f4fc2c0ff4a95e08a1a1a6c8110f6b5badfe167f3ee2147b692d23b",
+    "metallib_sha256": "930878f4a6b4dd826707af26bda1b5943c6dbfede54da3880a17956c540738ac",
+    "fixed_kernel_air_extraction_sha256": "c416a3b4f7e1aaf749913ae972efe09de57cd54fc3a2c5f439401e9456bfd0c3",
+    "rotating_kernel_air_extraction_sha256": "3c9e512ec0e534e569d8c5d091ab133180e6d0b146afeb30dbbcbbbda15da4d9",
+    "source_hashes": {
+      "build_rs": "5ca7720f316998a5ed6f2afbbd4e18a0ec617783c48136372ced47b06db815ba",
+      "blocked_radix128_generator_rs": "6bb03c9e380e4bab840e9a4f460d9e17a5a053be5cc200c7e9eabbd95b392d49",
+      "u32_field_metal": "48427b8da613b40d86f9fa724900d28dbaaca8ee936adb6351609196a6007cce",
+      "metal_diagnostic_rs": "cbdf09d954b7b9fed1797a164d824de3801a66e576c32303fee9987586ef965c",
+      "metal_diagnostic_sys_rs": "6f8308fa2dfdb3a6b4fa55d801278f0c83932d6759bcd328136cbbbe71fe1410",
+      "portable_model_rs": "e5a0d337b7a7439889f893167a86fdf6e0433b02b48709108c3a40a701e6a746",
+      "generator_test_rs": "f00f690af9e68f58fab9f5015bb5a577fc74b4e241b2e33ed13793b4ff7ed297"
+    }
+  },
+  "correctness": {
+    "portable_exact_integer_model_passed": true,
+    "portable_independent_r_inverse_oracle_passed": true,
+    "portable_global_multiplier_identity_passed": true,
+    "portable_truncated_low_k4_passed": true,
+    "portable_low_cancellation_identity_passed": true,
+    "portable_raw_range_bounds_passed": true,
+    "portable_exact_base_product_count_passed": true,
+    "metal_blst_differential_suite_passed": true,
+    "metal_cartesian_boundary_pairs": 144,
+    "metal_cartesian_boundary_definition": "x in {0,1,p-1}, each represented as x+k*p for k in 0..3, crossed with the same set",
+    "metal_forced_quotient_values": [
+      "0",
+      "2^128-1"
+    ],
+    "metal_forced_quotient_rounds": [
+      0,
+      1,
+      2
+    ],
+    "fixed_rhs_dependent_chain_elements": 4113,
+    "fixed_rhs_dependent_chain_iterations": 7,
+    "rotating_dependent_chain_elements": 4113,
+    "rotating_dependent_chain_iterations": 11,
+    "zero_and_ragged_lengths_checked": true,
+    "all_reported_legal_threadgroup_widths_checked": true,
+    "padding_canary_untouched": true,
+    "mismatched_lengths_rejected_before_device_setup": true,
+    "exact_4p_lhs_rejected_before_device_setup": true,
+    "exact_4p_rhs_rejected_before_device_setup": true,
+    "abi_probe_passed": true,
+    "fixed_rhs_outputs_checked_after_every_scout_sample": true,
+    "rotating_outputs_checked_after_every_warmup_and_decision_sample": true
+  },
+  "source_liveness_gate": {
+    "unit": "u32-equivalent source words; ulong counts as two",
+    "maximum_allowed": 56,
+    "typed_last_use_peak": 54,
+    "tokenized_emitted_source_last_use_peak": 54,
+    "typed_allocation_time_peak": 55,
+    "tokenized_allocation_time_peak": 55,
+    "acceptance_peak": 55,
+    "allocation_time_interpretation": "a new definition is counted before values whose last use occurs in the same statement are killed",
+    "physical_register_count": "unknown_not_exposed_by_available_apple_tooling",
+    "physical_spill_fill_traffic": "unknown_not_measured",
+    "passed": true
+  },
+  "optimized_air_audit": {
+    "tool": "xcrun air-objdump -d",
+    "interpretation": "optimized AIR IR, not final Apple GPU ISA or physical register allocation",
+    "fixed_rhs": {
+      "kernel": "bls12_381_metal_msm_u32_named_blocked128_karatsuba_l4_chain",
+      "kernel_ir_lines": 4315,
+      "kernel_ir_bytes": 152596,
+      "basic_blocks": 7,
+      "branch_instructions": 6,
+      "outer_runtime_loops": 1,
+      "mul_ir_operations": 189,
+      "mul_i64_operations": 177,
+      "mul_i32_operations": 12,
+      "variable_by_variable_mul_operations": 81,
+      "variable_by_constant_mul_operations": 108,
+      "load_operations": 26,
+      "store_operations": 12,
+      "gep_operations": 38,
+      "i32_phi_operations": 25
+    },
+    "rotating_operands": {
+      "kernel": "bls12_381_metal_msm_u32_named_blocked128_karatsuba_l4_rotating_chain",
+      "kernel_ir_lines": 4327,
+      "kernel_ir_bytes": 153272,
+      "basic_blocks": 7,
+      "branch_instructions": 6,
+      "outer_runtime_loops": 1,
+      "mul_ir_operations": 189,
+      "mul_i64_operations": 177,
+      "mul_i32_operations": 12,
+      "variable_by_variable_mul_operations": 81,
+      "variable_by_constant_mul_operations": 108,
+      "load_operations": 26,
+      "store_operations": 12,
+      "gep_operations": 38,
+      "i32_phi_operations": 37
+    },
+    "both_kernels": {
+      "arithmetic_loop_load_operations": 0,
+      "arithmetic_loop_store_operations": 0,
+      "arithmetic_loop_gep_operations": 0,
+      "arithmetic_loop_call_or_invoke_operations": 0,
+      "stores_are_post_loop_only": true,
+      "alloca_operations": 0,
+      "out_of_line_call_or_invoke_operations": 0,
+      "private_address_space_references": 0,
+      "threadgroup_address_space_references": 0,
+      "vector_or_simd_operation_references": 0,
+      "dynamic_limb_gep_operations": 0
+    },
+    "proves_physical_no_spill": false
+  },
+  "performance": {
+    "fixed_rhs_scout": {
+      "decision_role": "optimistic_short_scout_only",
+      "fixed_rhs_hoisting_possible": true,
+      "logical_fields": 131072,
+      "iterations": 8,
+      "dispatches_per_sample": 1,
+      "warmups_per_width": 1,
+      "samples_per_width": 3,
+      "selected_threadgroup_width": 32,
+      "best_width_median_gpu_complete_redc_per_second": 341347222.787
+    },
+    "rotating_operands_gate": {
+      "recurrence": "left_next=right; right_next=left*right*R^-1 mod p",
+      "fixed_rhs_hoisting": false,
+      "logical_fields": 131072,
+      "physical_fields": 131072,
+      "iterations": 32,
+      "dispatches_per_sample": 4,
+      "complete_redcs_per_sample": 16777216,
+      "selected_threadgroup_width": 64,
+      "width_scout_iterations": 8,
+      "width_scout_warmups_per_width": 1,
+      "width_scout_samples_per_width": 3,
+      "decision_warmups": 2,
+      "decision_samples": 20,
+      "one_command_and_one_wait_per_sample": true,
+      "timed_allocation": false,
+      "timed_upload": false,
+      "timed_readback": false,
+      "static_threadgroup_memory_bytes": 0,
+      "warmup_samples": [
+        {
+          "index": 0,
+          "gpu_ns": 46755500,
+          "wall_ns": 47589250,
+          "gpu_complete_redc_per_second": 358828715.338,
+          "wall_complete_redc_per_second": 352542139.244
+        },
+        {
+          "index": 1,
+          "gpu_ns": 35198833,
+          "wall_ns": 35569875,
+          "gpu_complete_redc_per_second": 476641256.828,
+          "wall_complete_redc_per_second": 471669242.582
+        }
+      ],
+      "decision_raw_samples": [
+        {
+          "index": 0,
+          "gpu_ns": 35996167,
+          "wall_ns": 36349292,
+          "gpu_complete_redc_per_second": 466083402.713,
+          "wall_complete_redc_per_second": 461555509.802
+        },
+        {
+          "index": 1,
+          "gpu_ns": 36043500,
+          "wall_ns": 36364250,
+          "gpu_complete_redc_per_second": 465471333.250,
+          "wall_complete_redc_per_second": 461365654.455
+        },
+        {
+          "index": 2,
+          "gpu_ns": 35222250,
+          "wall_ns": 35576291,
+          "gpu_complete_redc_per_second": 476324368.829,
+          "wall_complete_redc_per_second": 471584179.475
+        },
+        {
+          "index": 3,
+          "gpu_ns": 36047708,
+          "wall_ns": 36364375,
+          "gpu_complete_redc_per_second": 465416996.831,
+          "wall_complete_redc_per_second": 461364068.542
+        },
+        {
+          "index": 4,
+          "gpu_ns": 35517167,
+          "wall_ns": 35828542,
+          "gpu_complete_redc_per_second": 472369206.699,
+          "wall_complete_redc_per_second": 468263989.084
+        },
+        {
+          "index": 5,
+          "gpu_ns": 36088417,
+          "wall_ns": 36404166,
+          "gpu_complete_redc_per_second": 464891990.136,
+          "wall_complete_redc_per_second": 460859781.817
+        },
+        {
+          "index": 6,
+          "gpu_ns": 35880125,
+          "wall_ns": 36297833,
+          "gpu_complete_redc_per_second": 467590790.166,
+          "wall_complete_redc_per_second": 462209851.481
+        },
+        {
+          "index": 7,
+          "gpu_ns": 36557125,
+          "wall_ns": 36970750,
+          "gpu_complete_redc_per_second": 458931494.203,
+          "wall_complete_redc_per_second": 453797015.208
+        },
+        {
+          "index": 8,
+          "gpu_ns": 36847250,
+          "wall_ns": 37595625,
+          "gpu_complete_redc_per_second": 455317995.237,
+          "wall_complete_redc_per_second": 446254477.748
+        },
+        {
+          "index": 9,
+          "gpu_ns": 36334750,
+          "wall_ns": 36981167,
+          "gpu_complete_redc_per_second": 461740234.899,
+          "wall_complete_redc_per_second": 453669187.887
+        },
+        {
+          "index": 10,
+          "gpu_ns": 35965250,
+          "wall_ns": 36346333,
+          "gpu_complete_redc_per_second": 466484064.479,
+          "wall_complete_redc_per_second": 461593085.608
+        },
+        {
+          "index": 11,
+          "gpu_ns": 36497000,
+          "wall_ns": 36904750,
+          "gpu_complete_redc_per_second": 459687535.962,
+          "wall_complete_redc_per_second": 454608580.196
+        },
+        {
+          "index": 12,
+          "gpu_ns": 35682000,
+          "wall_ns": 35980375,
+          "gpu_complete_redc_per_second": 470187097.136,
+          "wall_complete_redc_per_second": 466287969.483
+        },
+        {
+          "index": 13,
+          "gpu_ns": 35949125,
+          "wall_ns": 36619667,
+          "gpu_complete_redc_per_second": 466693306.165,
+          "wall_complete_redc_per_second": 458147694.243
+        },
+        {
+          "index": 14,
+          "gpu_ns": 36223750,
+          "wall_ns": 36915584,
+          "gpu_complete_redc_per_second": 463155139.929,
+          "wall_complete_redc_per_second": 454475161.493
+        },
+        {
+          "index": 15,
+          "gpu_ns": 36205000,
+          "wall_ns": 37093166,
+          "gpu_complete_redc_per_second": 463395000.691,
+          "wall_complete_redc_per_second": 452299380.430
+        },
+        {
+          "index": 16,
+          "gpu_ns": 35909917,
+          "wall_ns": 36245375,
+          "gpu_complete_redc_per_second": 467202862.095,
+          "wall_complete_redc_per_second": 462878808.676
+        },
+        {
+          "index": 17,
+          "gpu_ns": 36083667,
+          "wall_ns": 36396250,
+          "gpu_complete_redc_per_second": 464953187.823,
+          "wall_complete_redc_per_second": 460960016.485
+        },
+        {
+          "index": 18,
+          "gpu_ns": 35351500,
+          "wall_ns": 35713458,
+          "gpu_complete_redc_per_second": 474582860.699,
+          "wall_complete_redc_per_second": 469772935.458
+        },
+        {
+          "index": 19,
+          "gpu_ns": 36118042,
+          "wall_ns": 36401333,
+          "gpu_complete_redc_per_second": 464510673.087,
+          "wall_complete_redc_per_second": 460895649.069
+        }
+      ],
+      "statistics": {
+        "median_definition": "mean of sorted ranks 10 and 11 for n=20",
+        "p5_definition": "nearest-rank percentile; sorted rank ceil(0.05*n)=1 for n=20",
+        "median_gpu_complete_redc_per_second": 465444165.041,
+        "p5_gpu_complete_redc_per_second": 455317995.237,
+        "median_wall_complete_redc_per_second": 461162042.514,
+        "p5_wall_complete_redc_per_second": 446254477.748,
+        "median_gpu_gate": 2000000000.0,
+        "p5_gpu_gate": 1800000000.0,
+        "median_gpu_gate_fraction": 0.2327220825205,
+        "p5_gpu_gate_fraction": 0.2529544417983333,
+        "median_wall_gate_fraction": 0.230581021257,
+        "p5_wall_gate_fraction": 0.2479191543044444,
+        "median_gpu_shortfall_factor": 4.296970830,
+        "p5_gpu_shortfall_factor": 3.953281045,
+        "passed": false
+      },
+      "runner_outcome": "printed NO_GO and then failed its fail-closed throughput assertion"
+    },
+    "product_count_projection_warning": {
+      "earlier_native_u32_median_raw_products_per_second": 1900899837349.835,
+      "raw_divided_by_189_product_only_equivalents_per_second": 10057671097.089,
+      "named_fios_median_complete_per_second": 1529069152.541,
+      "named_fios_air_multiply_class_operations": 300,
+      "pure_300_over_189_scaling_equivalents_per_second": 2427093892.922,
+      "interpretation": "different schedules and favorable product-count scaling were prioritization signals, not complete-field forecasts or device ceilings"
+    }
+  },
+  "decision": {
+    "value": "no_go",
+    "failed_gate": "both_operands_varying_complete_l4_field_throughput",
+    "scope": "this generated algorithm-v3 schedule on Apple M1 Max",
+    "point_or_msm_work_authorized": false,
+    "production_field_api_authorized": false,
+    "device_wide_impossibility_claim": false,
+    "physical_no_spill_claim": false,
+    "stop_rule": "do not begin point formulas, compact reduction trees, routing, buckets, or standalone MSM implementation on this M1 Max plan"
+  }
+}

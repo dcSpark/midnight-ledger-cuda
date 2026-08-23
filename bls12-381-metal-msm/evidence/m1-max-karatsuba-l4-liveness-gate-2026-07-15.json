@@ -1,0 +1,146 @@
+{
+  "schema": "bls12-381-metal-msm.karatsuba-l4-liveness-gate.v1",
+  "status": "no_go",
+  "measurement_scope": "pre_performance_source_liveness_gate",
+  "algorithm": {
+    "name": "generated-subtractive-karatsuba-l4-separated-redc",
+    "version": 2,
+    "limbs": 12,
+    "limb_bits": 32,
+    "input_range": "[0, 4p)",
+    "output_raw_bound": "< 3p",
+    "base_products_per_k12": 63,
+    "base_products_per_redc": 189,
+    "schedule_fingerprint": "0x757db3673700e544",
+    "abi_fingerprint": "0x6d0cc6ece65fd7b7",
+    "source_runtime_recursion": 0,
+    "source_dynamic_subscripts": 0,
+    "source_private_arrays": 0,
+    "source_simd_shuffles": 0,
+    "source_threadgroup_scratch_bytes": 0
+  },
+  "device": {
+    "name": "Apple M1 Max",
+    "gpu_cores": 32,
+    "hardware_model": "MacBookPro18,2",
+    "memory_bytes": 68719476736
+  },
+  "toolchain": {
+    "rustc": "1.95.0 (59807616e 2026-04-14)",
+    "llvm": "22.1.2",
+    "metal": "Apple metal version 32023.883 (metalfe-32023.883)",
+    "macos": "26.5.2 (25F84)",
+    "compile_flags": [
+      "-std=metal3.0",
+      "-mmacosx-version-min=13.0",
+      "-fno-fast-math",
+      "-fmetal-math-mode=safe",
+      "-fmetal-math-fp32-functions=precise",
+      "-ffp-contract=on"
+    ],
+    "generated_schedule_sha256": "e3b29aa0297fdec81623c67c80b56c0fd6a02118746544c721d1b6c408f52cff",
+    "generated_constants_metal_sha256": "9899bbf8b8eb09f5fc823828a020dd0be6267092ac60550602f156c28f8ff808",
+    "generated_constants_rust_sha256": "57bf7078181b70d540fdb168c8e1bc819e269893ce7f8db464c91728de4eecdd",
+    "air_sha256": "44c717d5186e3b9088e70363d6789016fd24396b684f3706d42c19be9816e211",
+    "metallib_sha256": "217ab2c547441427b24812dfbcfcbddb018ded42ae2ca5d890140c4dd5a8522f",
+    "source_hashes": {
+      "build_rs": "2b2c91be91d40cdb97693b34501ac05b4c651d2d774f5b27de0389f960f68b3b",
+      "u32_field_metal": "22045f70e3c24277b4f6c3e37e38090e4d90ed2a550efad9ee44f7147583daac",
+      "metal_diagnostic_rs": "2061019ee058a10360f175cf539335d5c7dc53ccd644f68dfd05a9a216d77575",
+      "metal_diagnostic_sys_rs": "d7a942053ac15a30ec55bd5a66fd84cfe56b4f053bb9f437aa4accd65d35bb8b",
+      "portable_model_rs": "34cb716bfee980f3b81918a4d16362b587de3a229243c4d86641ad0deb7027d1"
+    },
+    "optimized_air_audit": {
+      "tool": "xcrun air-objdump -d",
+      "kernel": "bls12_381_metal_msm_u32_named_karatsuba_l4_chain",
+      "kernel_ir_lines": 6818,
+      "basic_blocks": 7,
+      "conditional_branches": 3,
+      "unconditional_branches": 3,
+      "mul_ir_operations": 181,
+      "mul_i64_operations": 173,
+      "mul_i32_operations": 8,
+      "alloca_operations": 0,
+      "out_of_line_calls": 0,
+      "private_addrspace_5_references": 0,
+      "threadgroup_addrspace_3_references": 0,
+      "simd_operation_references": 0,
+      "dynamic_limb_gep_operations": 0,
+      "fixed_limb_gep_operations": 36,
+      "runtime_loops": "one outer dependent-chain loop only",
+      "interpretation": "optimized AIR IR for the full package metallib, not final Apple GPU ISA or register allocation"
+    },
+    "compiler_register_or_spill_metadata": "unknown"
+  },
+  "correctness": {
+    "portable_exact_integer_model_passed": true,
+    "portable_karatsuba_widths_checked": [
+      2,
+      3,
+      6,
+      12
+    ],
+    "portable_deterministic_random_canonical_redc_pairs": 2048,
+    "portable_deterministic_random_l4_redc_pairs": 2048,
+    "portable_redc_cancellation_checked_exactly": true,
+    "portable_raw_range_bounds_checked": true,
+    "portable_all_canonical_subtraction_paths_observed": true,
+    "implemented_metal_multiplication_correctness_suite_passed": true,
+    "metal_cartesian_boundary_pairs": 144,
+    "metal_cartesian_boundary_definition": "x in {0,1,p-1}, each represented as x+k*p for k in 0..3, crossed with the same set",
+    "metal_zero_representatives_checked": [
+      "0",
+      "p",
+      "2p",
+      "3p"
+    ],
+    "metal_dependent_chain_elements": 4113,
+    "metal_dependent_chain_iterations": 7,
+    "zero_and_ragged_lengths_checked": true,
+    "all_legal_threadgroup_widths_checked": true,
+    "padding_canary_untouched": true,
+    "mismatched_lengths_rejected_before_device_setup": true,
+    "exact_4p_lhs_rejected_before_device_setup": true,
+    "exact_4p_rhs_rejected_before_device_setup": true,
+    "abi_probe_passed": true,
+    "unreached_candidate_obligations": [
+      "in-place aliasing",
+      "direct REDC cancellation instrumentation in Metal",
+      "specialized square chain",
+      "fused D2/add-sub chains",
+      "point formulas"
+    ],
+    "unreached_items_reason": "not implemented or not run before the liveness stop"
+  },
+  "liveness_gate": {
+    "unit": "u32-equivalent source words; ulong counts as two",
+    "maximum_allowed": 56,
+    "top_level_aggregate_subset": 48,
+    "top_level_subset_is_acceptance_metric": false,
+    "full_flattened_helper_peak": 70,
+    "full_scan_excludes_caller_held_inputs_and_aggregates": true,
+    "product_helper_including_input_components_peak": 82,
+    "separated_redc_including_retained_numerator_lower_bound": 94,
+    "dependent_chain_including_loop_carried_rhs_lower_bound": 106,
+    "layered_counts_are_source_live_not_physical_registers": true,
+    "physical_spill_fill_traffic": "unknown_not_measured",
+    "passed": false
+  },
+  "performance": {
+    "short_scout_run": false,
+    "formal_gate_run": false,
+    "median_complete_l4_operations_per_second": null,
+    "p5_complete_l4_operations_per_second": null,
+    "stop_reason": "the source-liveness precondition fails before timed dispatch",
+    "fixed_rhs_chain_would_be_optimistic": true,
+    "both_operands_varying_gate_would_be_required_after_a_fixed_rhs_pass": true
+  },
+  "decision": {
+    "value": "no_go",
+    "failed_gate": "complete_dependent_chain_source_liveness",
+    "scope": "this generated algorithm-v2 schedule on Apple M1 Max",
+    "point_or_msm_work_authorized": false,
+    "device_wide_impossibility_claim": false,
+    "reopen_condition": "a materially different complete schedule must first measure at or below 56 source-live u32 equivalents, then demonstrate zero physical spills and pass fixed- and varying-operand throughput gates"
+  }
+}
