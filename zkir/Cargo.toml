@@ -27,6 +27,11 @@ gpu-blitzar = [
   "midnight-proofs/gpu-blitzar",
   "midnight-zk-stdlib/gpu-blitzar",
 ]
+gpu-metal-quotient-diagnostic = [
+  "transient-crypto/gpu-metal-quotient-diagnostic",
+  "midnight-proofs/metal-resident-quotient-diagnostic",
+  "midnight-zk-stdlib/metal-resident-quotient-diagnostic",
+]
 
 [dependencies]
 base-crypto = { version = "1.1.0", path = "../base-crypto", package = "midnight-base-crypto" }

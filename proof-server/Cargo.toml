@@ -11,6 +11,17 @@ cuda = ["dep:proof-server-cuda"]
 cuda-oxide = ["cuda", "proof-server-cuda/cuda-oxide"]
 deterministic-test-rng = ["ledger/test-utilities"]
 experimental = ["dep:zkir-v3"]
+metal = [
+    "dep:midnight-gpu-prover",
+    "midnight-gpu-prover/metal",
+    "transient-crypto/gpu-metal-quotient-diagnostic",
+    "zkir/gpu-metal-quotient-diagnostic",
+    "zkir-v3?/gpu-metal-quotient-diagnostic",
+]
+metal-diagnostics = ["metal", "midnight-gpu-prover/metal-diagnostics"]
+# Backwards-compatible feature alias. Resident quotient substitution is part of
+# the production Metal build; the old name remains for existing build scripts.
+metal-quotient-diagnostic = ["metal"]
 gpu-blitzar = [
     "cuda",
     "dep:midnight-sppark-msm",
@@ -24,7 +35,7 @@ perf-timers = []
 name = "proof-backend-parity"
 path = "src/bin/proof_backend_parity.rs"
 required-features = ["deterministic-test-rng"]
-test = false
+test = true
 
 [dependencies]
 ledger = { path = "../ledger", package = "midnight-ledger-v9", default-features = false, features = ["proving"] }
@@ -38,6 +49,7 @@ serialize = { path = "../serialize", package = "midnight-serialize" }
 zkir = { path = "../zkir", package = "midnight-zkir" }
 zkir-v3 = { path = "../zkir-v3", package = "midnight-zkir-v3", optional = true }
 proof-server-cuda = { path = "../proof-server-cuda", package = "midnight-proof-server-cuda", optional = true }
+midnight-gpu-prover = { path = "../midnight-gpu-prover", optional = true }
 midnight-sppark-msm = { path = "../midnight-sppark-msm", optional = true }
 
 introspection = "0.1.0"
@@ -64,6 +76,7 @@ serde_json = "1.0.140"
 anyhow = "^1.0.102"
 
 [dev-dependencies]
+midnight-proofs = { version = "^0.8.1", features = ["gpu-resident-graph-test-support"] }
 ledger = { path = "../ledger", package = "midnight-ledger-v9", features = ["test-utilities", "proving"] }
 onchain-runtime = { path = "../onchain-runtime", package = "midnight-onchain-runtime" }
 transient-crypto = { path = "../transient-crypto", package = "midnight-transient-crypto" }

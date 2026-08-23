@@ -44,7 +44,7 @@ use std::io::{self, Read};
 #[cfg(feature = "proptest")]
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
-#[cfg(feature = "gpu-blitzar")]
+#[cfg(any(feature = "gpu-blitzar", feature = "gpu-metal"))]
 use std::sync::{Condvar, OnceLock};
 use std::{any::Any, cmp::Ordering};
 use std::{borrow::Cow, num::NonZeroUsize};
@@ -66,25 +66,25 @@ pub trait ParamsProverProvider {
 /// The hash used during proof transcript processing
 pub type TranscriptHash = blake2b_simd::State;
 
-#[cfg(feature = "gpu-blitzar")]
+#[cfg(any(feature = "gpu-blitzar", feature = "gpu-metal"))]
 #[derive(Default)]
 struct GpuProofState {
     gpu_active: bool,
     cpu_active: usize,
 }
 
-#[cfg(feature = "gpu-blitzar")]
+#[cfg(any(feature = "gpu-blitzar", feature = "gpu-metal"))]
 fn gpu_proof_state() -> &'static (Mutex<GpuProofState>, Condvar) {
     static STATE: OnceLock<(Mutex<GpuProofState>, Condvar)> = OnceLock::new();
     STATE.get_or_init(|| (Mutex::new(GpuProofState::default()), Condvar::new()))
 }
 
-#[cfg(feature = "gpu-blitzar")]
+#[cfg(any(feature = "gpu-blitzar", feature = "gpu-metal"))]
 struct GpuProofPermit {
     gpu: bool,
 }
 
-#[cfg(feature = "gpu-blitzar")]
+#[cfg(any(feature = "gpu-blitzar", feature = "gpu-metal"))]
 impl GpuProofPermit {
     fn acquire(gpu: bool) -> Self {
         let (lock, wake) = gpu_proof_state();
@@ -105,7 +105,7 @@ impl GpuProofPermit {
     }
 }
 
-#[cfg(feature = "gpu-blitzar")]
+#[cfg(any(feature = "gpu-blitzar", feature = "gpu-metal"))]
 impl Drop for GpuProofPermit {
     fn drop(&mut self) {
         let (lock, wake) = gpu_proof_state();
@@ -124,7 +124,7 @@ impl Drop for GpuProofPermit {
     }
 }
 
-#[cfg(all(test, feature = "gpu-blitzar"))]
+#[cfg(all(test, any(feature = "gpu-blitzar", feature = "gpu-metal")))]
 mod gpu_proof_permit_tests {
     use super::GpuProofPermit;
     use std::{sync::mpsc, thread, time::Duration};
@@ -158,17 +158,68 @@ mod gpu_proof_permit_tests {
 #[cfg(feature = "gpu-blitzar")]
 /// Restores the previous Blitzar prover acceleration state when dropped.
 pub struct GpuBlitzarGuard {
-    _guard: midnight_proofs::poly::kzg::gpu_blitzar::EnableGuard,
-    _permit: GpuProofPermit,
+    _guard: ProofAcceleratorGuard,
 }
 
 #[cfg(feature = "gpu-blitzar")]
 impl GpuBlitzarGuard {
     /// Enables or disables Blitzar-backed prover MSMs for the lifetime of the guard.
     pub fn set(enabled: bool) -> Self {
-        let permit = GpuProofPermit::acquire(enabled);
         Self {
-            _guard: midnight_proofs::poly::kzg::gpu_blitzar::EnableGuard::set(enabled),
+            _guard: ProofAcceleratorGuard::set(enabled, false),
+        }
+    }
+}
+
+#[cfg(feature = "gpu-metal")]
+/// Restores the previous Metal NTT selection state when dropped.
+pub struct MetalNttGuard {
+    _guard: ProofAcceleratorGuard,
+}
+
+#[cfg(feature = "gpu-metal")]
+impl MetalNttGuard {
+    /// Enables or disables the fail-closed Metal NTT bridge for this proof.
+    pub fn set(enabled: bool) -> Self {
+        Self {
+            _guard: ProofAcceleratorGuard::set(false, enabled),
+        }
+    }
+}
+
+#[cfg(any(feature = "gpu-blitzar", feature = "gpu-metal"))]
+/// Selects every proof accelerator under one process-wide execution permit.
+///
+/// The separately built CUDA and Metal lanes share this source-level guard so
+/// each proof acquires the non-reentrant permit exactly once. A build selects
+/// one accelerator implementation, and a CPU proof disables that lane's hook.
+pub struct ProofAcceleratorGuard {
+    #[cfg(feature = "gpu-blitzar")]
+    _blitzar: midnight_proofs::poly::kzg::gpu_blitzar::EnableGuard,
+    #[cfg(feature = "gpu-metal")]
+    _metal: midnight_curves::gpu_metal::EnableGuard,
+    _permit: GpuProofPermit,
+}
+
+#[cfg(any(feature = "gpu-blitzar", feature = "gpu-metal"))]
+impl ProofAcceleratorGuard {
+    /// Selects exactly one accelerator mode for the lifetime of the guard.
+    pub fn set(blitzar_enabled: bool, metal_enabled: bool) -> Self {
+        assert!(
+            !(blitzar_enabled && metal_enabled),
+            "one proof cannot select both Blitzar and Metal"
+        );
+        #[cfg(not(feature = "gpu-blitzar"))]
+        assert!(!blitzar_enabled, "this build has no Blitzar proof route");
+        #[cfg(not(feature = "gpu-metal"))]
+        assert!(!metal_enabled, "this build has no Metal proof route");
+
+        let permit = GpuProofPermit::acquire(blitzar_enabled || metal_enabled);
+        Self {
+            #[cfg(feature = "gpu-blitzar")]
+            _blitzar: midnight_proofs::poly::kzg::gpu_blitzar::EnableGuard::set(blitzar_enabled),
+            #[cfg(feature = "gpu-metal")]
+            _metal: midnight_curves::gpu_metal::EnableGuard::set(metal_enabled),
             _permit: permit,
         }
     }

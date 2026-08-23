@@ -13,6 +13,15 @@
 
 #![deny(unreachable_pub)]
 #![deny(warnings)]
+
+#[cfg(all(
+    feature = "metal",
+    any(feature = "cuda", feature = "cuda-oxide", feature = "gpu-blitzar")
+))]
+compile_error!(
+    "proof-server accelerator lanes are separate builds: do not combine `metal` with `cuda`, `cuda-oxide`, or `gpu-blitzar`"
+);
+
 use actix_cors::Cors;
 use actix_web::dev::Server;
 use actix_web::middleware::Logger;
@@ -41,6 +50,9 @@ pub fn server_with_backend(
     pool: WorkerPool,
     prover_backend: prover_backend::ProverBackend,
 ) -> std::io::Result<(Server, u16)> {
+    prover_backend
+        .execution_route()
+        .map_err(std::io::Error::other)?;
     let pool = Arc::new(pool);
     let http_server = HttpServer::new(move || {
         let app = App::new()
