@@ -50,7 +50,7 @@ use rand::{CryptoRng, Rng, seq::SliceRandom};
 use reqwest::Client;
 use serialize::{Serializable, Tagged};
 #[cfg(feature = "proving")]
-use serialize::{tagged_deserialize, tagged_serialize, peek_tag};
+use serialize::{peek_tag, tagged_deserialize, tagged_serialize};
 use std::collections::VecDeque;
 use std::env;
 use std::io;
@@ -701,7 +701,7 @@ pub fn test_resolver(test_name: &'static str) -> Resolver {
                     return Ok(None);
                 };
                 Ok(Some(ProvingKeyMaterial {
-                    prover_key,
+                    prover_key: prover_key.into(),
                     verifier_key,
                     ir_source,
                 }))

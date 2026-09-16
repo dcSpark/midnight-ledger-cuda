@@ -1,0 +1,33 @@
+[package]
+name = "midnight-sppark-msm"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+version = "0.1.0"
+publish = false
+
+[lib]
+name = "midnight_sppark_msm"
+
+[features]
+default = ["cuda"]
+cuda = []
+opencl = []
+
+[dependencies]
+blst = "0.3.16"
+blstrs = { version = "0.7.1", features = ["__private_bench", "gpu"] }
+ec-gpu = "0.2.0"
+ec-gpu-gen = { version = "0.7.1", default-features = false, features = ["cuda"] }
+group = "0.13"
+sppark = { version = "0.1.15", features = ["cuda"] }
+
+[dev-dependencies]
+ff = "0.13"
+midnight-curves = { path = "../vendor/midnight-curves-0.3.1" }
+
+[build-dependencies]
+blst = "0.3.16"
+blstrs = { version = "0.7.1", features = ["__private_bench", "gpu"] }
+ec-gpu-gen = { version = "0.7.1", default-features = false, features = ["cuda"] }
+sppark = { version = "0.1.15", features = ["build", "cuda"] }

@@ -44,6 +44,8 @@ use std::io::{self, Read};
 #[cfg(feature = "proptest")]
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "gpu-blitzar")]
+use std::sync::{Condvar, OnceLock};
 use std::{any::Any, cmp::Ordering};
 use std::{borrow::Cow, num::NonZeroUsize};
 use std::{fmt::Debug, io::Seek};
@@ -63,6 +65,114 @@ pub trait ParamsProverProvider {
 
 /// The hash used during proof transcript processing
 pub type TranscriptHash = blake2b_simd::State;
+
+#[cfg(feature = "gpu-blitzar")]
+#[derive(Default)]
+struct GpuProofState {
+    gpu_active: bool,
+    cpu_active: usize,
+}
+
+#[cfg(feature = "gpu-blitzar")]
+fn gpu_proof_state() -> &'static (Mutex<GpuProofState>, Condvar) {
+    static STATE: OnceLock<(Mutex<GpuProofState>, Condvar)> = OnceLock::new();
+    STATE.get_or_init(|| (Mutex::new(GpuProofState::default()), Condvar::new()))
+}
+
+#[cfg(feature = "gpu-blitzar")]
+struct GpuProofPermit {
+    gpu: bool,
+}
+
+#[cfg(feature = "gpu-blitzar")]
+impl GpuProofPermit {
+    fn acquire(gpu: bool) -> Self {
+        let (lock, wake) = gpu_proof_state();
+        let mut state = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while state.gpu_active || (gpu && state.cpu_active != 0) {
+            state = wake
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        if gpu {
+            state.gpu_active = true;
+        } else {
+            state.cpu_active += 1;
+        }
+        Self { gpu }
+    }
+}
+
+#[cfg(feature = "gpu-blitzar")]
+impl Drop for GpuProofPermit {
+    fn drop(&mut self) {
+        let (lock, wake) = gpu_proof_state();
+        let mut state = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.gpu {
+            state.gpu_active = false;
+        } else {
+            state.cpu_active = state
+                .cpu_active
+                .checked_sub(1)
+                .expect("CPU proof permit accounting underflow");
+        }
+        wake.notify_all();
+    }
+}
+
+#[cfg(all(test, feature = "gpu-blitzar"))]
+mod gpu_proof_permit_tests {
+    use super::GpuProofPermit;
+    use std::{sync::mpsc, thread, time::Duration};
+
+    fn assert_waits_for(active: GpuProofPermit, requested_gpu: bool) {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+        let waiter = thread::spawn(move || {
+            started_tx.send(()).expect("start receiver exists");
+            let _permit = GpuProofPermit::acquire(requested_gpu);
+            acquired_tx.send(()).expect("acquire receiver exists");
+        });
+
+        started_rx.recv().expect("waiter started");
+        assert!(acquired_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(active);
+        acquired_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("waiter acquires after active permit drops");
+        waiter.join().expect("waiter did not panic");
+    }
+
+    #[test]
+    fn gpu_permit_is_exclusive_with_cpu_and_gpu_proofs() {
+        assert_waits_for(GpuProofPermit::acquire(false), true);
+        assert_waits_for(GpuProofPermit::acquire(true), false);
+        assert_waits_for(GpuProofPermit::acquire(true), true);
+    }
+}
+
+#[cfg(feature = "gpu-blitzar")]
+/// Restores the previous Blitzar prover acceleration state when dropped.
+pub struct GpuBlitzarGuard {
+    _guard: midnight_proofs::poly::kzg::gpu_blitzar::EnableGuard,
+    _permit: GpuProofPermit,
+}
+
+#[cfg(feature = "gpu-blitzar")]
+impl GpuBlitzarGuard {
+    /// Enables or disables Blitzar-backed prover MSMs for the lifetime of the guard.
+    pub fn set(enabled: bool) -> Self {
+        let permit = GpuProofPermit::acquire(enabled);
+        Self {
+            _guard: midnight_proofs::poly::kzg::gpu_blitzar::EnableGuard::set(enabled),
+            _permit: permit,
+        }
+    }
+}
 
 impl ParamsProverProvider for base_crypto::data_provider::MidnightDataProvider {
     async fn get_params(&self, k: u8) -> io::Result<ParamsProver> {
@@ -96,7 +206,8 @@ impl ParamsProver {
         )?)))
     }
 
-    pub(crate) fn as_verifier(&self) -> ParamsVerifier {
+    /// Returns the verifier-parameter view for these prover parameters.
+    pub fn as_verifier(&self) -> ParamsVerifier {
         ParamsVerifier(Arc::new(self.0.verifier_params()))
     }
 }
@@ -660,7 +771,7 @@ tag_enforcement_test!(WrappedIr);
 /// A container for the parts required for proving
 pub struct ProvingKeyMaterial {
     /// The prover key
-    pub prover_key: Vec<u8>,
+    pub prover_key: Arc<Vec<u8>>,
     /// The verifier key
     pub verifier_key: Vec<u8>,
     /// The IR source
@@ -748,25 +859,46 @@ impl ProofPreimage {
         params: &impl ParamsProverProvider,
         resolver: &impl Resolver,
     ) -> Result<(Proof, Vec<Option<usize>>), ProvingError> {
-        let proof_data = resolver
-            .resolve_key(self.key_location.clone())
-            .await?
-            .ok_or(anyhow::Error::msg(format!(
-                "failed to find proving key for '{}'",
-                self.key_location.0
-            )))?;
-        let ir = Z::load_ir_from_tagged(io::Cursor::new(&proof_data.ir_source[..]))?;
-        let verifier_key = tagged_deserialize::<VerifierKey>(&mut &proof_data.verifier_key[..])?;
+        let proof_data = crate::proof_timer::timed_async(
+            "proof_server.prover.transient.resolve_key",
+            resolver.resolve_key(self.key_location.clone()),
+        )
+        .await?
+        .ok_or(anyhow::Error::msg(format!(
+            "failed to find proving key for '{}'",
+            &self.key_location.0
+        )))?;
+        let ir = crate::proof_timer::timed("proof_server.prover.transient.load_ir", || {
+            Z::load_ir_from_tagged(io::Cursor::new(&proof_data.ir_source[..]))
+        })?;
+        let verifier_key =
+            crate::proof_timer::timed("proof_server.prover.transient.load_vk", || {
+                tagged_deserialize::<VerifierKey>(&mut &proof_data.verifier_key[..])
+            })?;
         let prover_key =
-            Z::load_prover_key_from_tagged(io::Cursor::new(&proof_data.prover_key[..]))?;
-        let (proof, pis, pi_skips) = ir.prove(rng, params, prover_key, self).await?;
+            crate::proof_timer::timed("proof_server.prover.transient.load_pk", || {
+                Z::load_prover_key_from_tagged(io::Cursor::new(&proof_data.prover_key[..]))
+            })?;
+        let (proof, pis, pi_skips) =
+            crate::proof_timer::timed_async("proof_server.prover.transient.ir_prove", async {
+                ir.prove(rng, params, prover_key, self).await
+            })
+            .await?;
         debug!("proof created; verifying to make sure");
         let k = verifier_key.force_init()?.k();
-        if let Err(e) = verifier_key.verify(
-            &params.get_params(k).await?.as_verifier(),
-            &proof,
-            pis.iter().copied(),
-        ) {
+        let verifier_params =
+            crate::proof_timer::timed_async("proof_server.prover.transient.verify_params", async {
+                params
+                    .get_params(k)
+                    .await
+                    .map(|params| params.as_verifier())
+            })
+            .await?;
+        if let Err(e) =
+            crate::proof_timer::timed("proof_server.prover.transient.self_verify", || {
+                verifier_key.verify(&verifier_params, &proof, pis.iter().copied())
+            })
+        {
             error!(error = ?e, ?pis, ?ir, "self-verification failed! This may be a bug, check that your keys match!");
             return Err(e);
         }

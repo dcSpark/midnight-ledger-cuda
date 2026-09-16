@@ -7,12 +7,28 @@ publish = false
 
 [features]
 default = []
-# Disabled for now, as we currently have no experimental features.
-#experimental = []
+cuda = ["dep:proof-server-cuda"]
+cuda-oxide = ["cuda", "proof-server-cuda/cuda-oxide"]
+deterministic-test-rng = ["ledger/test-utilities"]
+gpu-blitzar = [
+    "cuda",
+    "dep:midnight-sppark-msm",
+    "transient-crypto/gpu-blitzar",
+    "zkir/gpu-blitzar",
+    "zkir-v3/gpu-blitzar",
+]
+perf-timers = []
+
+[[bin]]
+name = "proof-backend-parity"
+path = "src/bin/proof_backend_parity.rs"
+required-features = ["deterministic-test-rng"]
+test = false
 
 [dependencies]
 ledger = { path = "../ledger", package = "midnight-ledger-v9", default-features = false, features = ["proving"] }
 zswap = { path = "../zswap", package = "midnight-zswap" }
+coin-structure = { path = "../coin-structure", package = "midnight-coin-structure" }
 base-crypto = { path = "../base-crypto", package = "midnight-base-crypto" }
 transient-crypto = { path = "../transient-crypto", package = "midnight-transient-crypto" }
 storage = { path = "../storage", package = "midnight-storage" }
@@ -20,6 +36,8 @@ serialize = { path = "../serialize", package = "midnight-serialize" }
 
 zkir = { path = "../zkir", package = "midnight-zkir" }
 zkir-v3 = { path = "../zkir-v3", package = "midnight-zkir-v3" }
+proof-server-cuda = { path = "../proof-server-cuda", package = "midnight-proof-server-cuda", optional = true }
+midnight-sppark-msm = { path = "../midnight-sppark-msm", optional = true }
 
 introspection = "0.1.0"
 # rand 0.9.0 is not yet supported by some of our dependencies, we will
@@ -41,10 +59,11 @@ tokio = "1.46.1"
 async-channel = "2.5.0"
 time = { version = "0.3.47", features = ["serde-human-readable"] }
 serde = "1.0.219"
+serde_json = "1.0.140"
+anyhow = "^1.0.102"
 
 [dev-dependencies]
 ledger = { path = "../ledger", package = "midnight-ledger-v9", features = ["test-utilities", "proving"] }
-coin-structure = { path = "../coin-structure", package = "midnight-coin-structure" }
 onchain-runtime = { path = "../onchain-runtime", package = "midnight-onchain-runtime" }
 transient-crypto = { path = "../transient-crypto", package = "midnight-transient-crypto" }
 env_logger = "^0.11"

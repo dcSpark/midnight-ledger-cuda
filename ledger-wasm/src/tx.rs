@@ -421,7 +421,7 @@ impl Transaction {
                     )
                 };
                 Ok(Some(ProvingKeyMaterial {
-                    prover_key: getprop("proverKey")?,
+                    prover_key: getprop("proverKey")?.into(),
                     verifier_key: getprop("verifierKey")?,
                     ir_source: getprop("ir")?,
                 }))

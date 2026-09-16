@@ -20,7 +20,8 @@ use futures::future::join;
 use ledger::dust::DustResolver;
 use ledger::prove::Resolver;
 use midnight_proof_server::endpoints::PUBLIC_PARAMS;
-use midnight_proof_server::{server, worker_pool::WorkerPool};
+use midnight_proof_server::prover_backend::ProverBackend;
+use midnight_proof_server::{server_with_backend, worker_pool::WorkerPool};
 use tracing::{Level, info};
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt;
@@ -55,6 +56,13 @@ struct Args {
         env = "MIDNIGHT_PROOF_SERVER_NO_FETCH_PARAMS"
     )]
     no_fetch_params: bool,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = ProverBackend::Cpu,
+        env = "MIDNIGHT_PROOF_SERVER_PROVER_BACKEND"
+    )]
+    prover_backend: ProverBackend,
 }
 
 #[actix_web::main]
@@ -91,7 +99,8 @@ async fn main() -> std::io::Result<()> {
         keys.into_iter().collect::<Result<Vec<_>, _>>()?;
     }
     let pool = WorkerPool::new(args.num_workers, args.job_capacity, args.job_timeout);
-    server(args.port, !args.no_fetch_params, pool)
+    info!("Using {} prover backend", args.prover_backend);
+    server_with_backend(args.port, !args.no_fetch_params, pool, args.prover_backend)
         .unwrap()
         .0
         .await

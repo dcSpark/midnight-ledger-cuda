@@ -42,6 +42,8 @@ use transient_crypto::proofs::{KeyLocation, ProvingKeyMaterial, Resolver as Reso
 use zkir as zkir_v2;
 use zswap::prove::ZswapResolver;
 
+use crate::perf_timed;
+use crate::prover_backend::ProverBackend;
 use crate::versioned_ir;
 use crate::worker_pool::{JobStatus, WorkError, WorkerPool};
 
@@ -244,10 +246,13 @@ pub(crate) async fn check(
 #[post("/prove")]
 pub(crate) async fn prove(
     pool: Data<Arc<WorkerPool>>,
+    backend: Data<ProverBackend>,
     payload: Payload,
 ) -> Result<HttpResponse, Error> {
     info!("Starting to process request for /prove...");
-    let request = payload_to_bytes(payload).await?;
+    let request = perf_timed!("proof_server.request.payload", {
+        payload_to_bytes(payload).await
+    })?;
     debug!(
         "Received request: {}",
         (&request[..]).encode_hex::<String>()
@@ -256,9 +261,13 @@ pub(crate) async fn prove(
         ProofPreimageVersioned,
         Option<ProvingKeyMaterial>,
         Option<Fr>,
-    ) = tagged_deserialize(&request[..]).map_err(ErrorBadRequest)?;
+    ) = perf_timed!("proof_server.request.decode", {
+        tagged_deserialize(&request[..])
+    })
+    .map_err(ErrorBadRequest)?;
 
     let data_resolver = data.clone();
+    let prover_backend = *backend.get_ref();
     let (_id, updates) = pool
         .submit_and_subscribe(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
@@ -287,24 +296,31 @@ pub(crate) async fn prove(
                             inner.binding_input = binding_input;
                             ppi = Arc::new(inner);
                         }
-                        let proving_data = match data {
-                            Some(pkm) => pkm,
-                            None => resolver
-                                .resolve_key(ppi.key_location.clone())
-                                .await
-                                .map_err(|e| WorkError::BadInput(e.to_string()))?
-                                .ok_or_else(|| {
-                                    WorkError::BadInput(format!(
-                                        "couldn't find key {}",
-                                        ppi.key_location.0
-                                    ))
-                                })?,
-                        };
+                        let proving_data = perf_timed!("proof_server.prove.key_material", {
+                            match data {
+                                Some(pkm) => Ok(pkm),
+                                None => resolver
+                                    .resolve_key(ppi.key_location.clone())
+                                    .await
+                                    .map_err(|e| WorkError::BadInput(e.to_string()))?
+                                    .ok_or_else(|| {
+                                        WorkError::BadInput(format!(
+                                            "couldn't find key {}",
+                                            &ppi.key_location.0
+                                        ))
+                                }),
+                            }
+                        })?;
 
-                        let proof = versioned_ir::prove(ppi, &proving_data.ir_source, &resolver)
-                            .await
-                            .map_err(WorkError::BadInput)?
-                            .0;
+                        let proof = versioned_ir::prove_with_backend(
+                            prover_backend,
+                            ppi,
+                            &proving_data.ir_source,
+                            &resolver,
+                        )
+                        .await
+                        .map_err(WorkError::BadInput)?
+                        .0;
 
                         ProofVersioned::V2(proof)
                     }
@@ -313,8 +329,10 @@ pub(crate) async fn prove(
                     _ => unreachable!(),
                 };
                 let mut response = Vec::new();
-                tagged_serialize(&proof, &mut response)
-                    .map_err(|e| WorkError::InternalError(e.to_string()))?;
+                perf_timed!("proof_server.response.encode", {
+                    tagged_serialize(&proof, &mut response)
+                })
+                .map_err(|e| WorkError::InternalError(e.to_string()))?;
                 Ok(response)
             })
         })
