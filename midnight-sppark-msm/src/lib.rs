@@ -4997,6 +4997,129 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "test-hooks")]
+    #[test]
+    fn scrambled_device_msm_waits_for_delayed_mask_producer() {
+        unsafe extern "C" {
+            fn midnight_sppark_test_mask_delay(delay_ms: u32);
+        }
+        struct ResetDelay;
+        impl Drop for ResetDelay {
+            fn drop(&mut self) {
+                unsafe { midnight_sppark_test_mask_delay(0) };
+            }
+        }
+        let _reset = ResetDelay;
+        // Match the real prover's private execution lane and multiple MSM engines.
+        let _lane = SpparkExecutionGuard::acquire_with_affinity_and_config(
+            0,
+            Bls12_381MsmConfig::for_k(14),
+        )
+        .unwrap();
+        unsafe { midnight_sppark_test_mask_delay(100) };
+        assert_scrambled_device_msm_batch_matches_cpu(4096, 3);
+    }
+
+    #[cfg(feature = "test-hooks")]
+    fn assert_device_msm_waits_for_delayed_input(ragged: bool, sparse: bool) {
+        unsafe extern "C" {
+            fn midnight_sppark_test_delayed_scale(
+                device: *mut std::ffi::c_void,
+                scale: Bls12_381Fr,
+                delay_ms: u32,
+            ) -> sppark::Error;
+        }
+        let _lane = SpparkExecutionGuard::acquire_with_affinity_and_config(
+            0,
+            Bls12_381MsmConfig::for_k(14),
+        )
+        .unwrap();
+        let len = 4096;
+        let batch_count = 3;
+        let points = (0..len)
+            .map(|i| G1Projective::generator() * Fq::from(i as u64 + 1))
+            .collect::<Vec<_>>();
+        let raw_points = points
+            .iter()
+            .map(|point| {
+                let affine = G1Affine::from(point);
+                let raw: &blst::blst_p1_affine = affine.as_ref();
+                Bls12_381G1Affine {
+                    x: raw.x.l,
+                    y: raw.y.l,
+                }
+            })
+            .collect::<Vec<_>>();
+        let context = bls12_381_g1_msm_context(&raw_points).unwrap();
+        let scalars = (0..len * batch_count)
+            .map(|i| {
+                if sparse && i % 7 == 0 {
+                    Fq::ZERO
+                } else {
+                    Fq::from((i * 31 + 7) as u64)
+                }
+            })
+            .collect::<Vec<_>>();
+        let raw_scalars = scalars.iter().copied().map(raw_from_fq).collect::<Vec<_>>();
+        let device = Bls12_381FrDeviceVec::upload(&raw_scalars).unwrap();
+        let status = unsafe {
+            midnight_sppark_test_delayed_scale(device.raw.as_ptr(), raw_from_fq(Fq::from(2)), 100)
+        };
+        assert_eq!(status.code, 0);
+        let start = if ragged { 17 } else { 0 };
+        let actual = if ragged {
+            let slices = (0..batch_count)
+                .map(|batch| Bls12_381MsmSlice {
+                    scalar_offset: batch * len + start,
+                    point_offset: start,
+                    len: len - start,
+                    nonzero_len: scalars[batch * len + start..(batch + 1) * len]
+                        .iter()
+                        .filter(|scalar| !bool::from(scalar.is_zero()))
+                        .count(),
+                })
+                .collect::<Vec<_>>();
+            bls12_381_g1_msm_context_device_ragged(&context, &device, &slices).unwrap()
+        } else {
+            bls12_381_g1_msm_context_device_batch(&context, &device, 0, batch_count).unwrap()
+        };
+        for (batch, actual) in actual.iter().enumerate() {
+            let doubled = scalars[batch * len + start..(batch + 1) * len]
+                .iter()
+                .map(|scalar| *scalar + *scalar)
+                .collect::<Vec<_>>();
+            let expected = G1Projective::multi_exp(&points[start..], &doubled);
+            let expected: &blst::blst_p1 = expected.as_ref();
+            let actual = blst::blst_p1 {
+                x: blst::blst_fp { l: actual.x },
+                y: blst::blst_fp { l: actual.y },
+                z: blst::blst_fp { l: actual.z },
+            };
+            assert!(
+                unsafe { blst::blst_p1_is_equal(&actual, expected) },
+                "ragged={ragged} batch={batch}"
+            );
+        }
+    }
+
+    #[cfg(feature = "test-hooks")]
+    #[test]
+    fn direct_device_msm_waits_for_delayed_input_producer() {
+        assert_device_msm_waits_for_delayed_input(false, false);
+    }
+
+    #[cfg(feature = "test-hooks")]
+    #[test]
+    fn ragged_device_msm_waits_for_delayed_input_producer() {
+        assert_device_msm_waits_for_delayed_input(true, false);
+    }
+
+    #[cfg(feature = "test-hooks")]
+    #[test]
+    fn sparse_ragged_device_msm_waits_for_delayed_input_producer() {
+        assert_device_msm_waits_for_delayed_input(true, true);
+    }
+
     #[test]
     fn fully_device_reducer_resets_persistent_context_state() {
         let len = 4096;
@@ -5029,12 +5152,9 @@ mod tests {
                 .map(|batch| {
                     (0..len)
                         .map(|idx| {
-                            Fq::from(
-                                ((idx * 29 + batch * 43 + round * 71 + 11) % 65521 + 1)
-                                    as u64,
-                            )
-                            .invert()
-                            .unwrap()
+                            Fq::from(((idx * 29 + batch * 43 + round * 71 + 11) % 65521 + 1) as u64)
+                                .invert()
+                                .unwrap()
                         })
                         .collect::<Vec<_>>()
                 })
@@ -5046,13 +5166,9 @@ mod tests {
                 .map(raw_from_fq)
                 .collect::<Vec<_>>();
             let device = Bls12_381FrDeviceVec::upload(&raw_scalars).unwrap();
-            let actual = bls12_381_g1_msm_context_device_scrambled_batch(
-                &context,
-                &device,
-                0,
-                batch_count,
-            )
-            .unwrap();
+            let actual =
+                bls12_381_g1_msm_context_device_scrambled_batch(&context, &device, 0, batch_count)
+                    .unwrap();
 
             for (batch, (actual, scalars)) in actual.iter().zip(&scalar_batches).enumerate() {
                 let expected = G1Projective::multi_exp(&points, scalars);

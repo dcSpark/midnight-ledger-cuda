@@ -13,6 +13,8 @@ name = "midnight_sppark_msm"
 default = ["cuda"]
 cuda = []
 opencl = []
+# Explicitly opt-in test instrumentation; never enabled by the proof server.
+test-hooks = []
 
 [dependencies]
 blst = "0.3.16"
