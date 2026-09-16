@@ -308,7 +308,7 @@ pub(crate) async fn prove(
                                             "couldn't find key {}",
                                             &ppi.key_location.0
                                         ))
-                                }),
+                                    }),
                             }
                         })?;
 
