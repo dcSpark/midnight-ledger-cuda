@@ -8,19 +8,12 @@ We use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 ### Added
+
 ### Changed
+
 ### Removed
 
-## [2.3.3]
-
-### Changed
-* Display the underlying error message in `Relation::circuit` synthesis errors [#452](https://github.com/midnightntwrk/midnight-zk/pull/452)
-
-## [2.3.2]
-### Changed
-* Bump `midnight-circuits` to 7.2.2 [451](https://github.com/midnightntwrk/midnight-zk/pull/451)
-
-## [2.3.1]
+##[2.3.1]
 ### Fixed
 * Bug fix in midnight-curves [#434](https://github.com/midnightntwrk/midnight-zk/pull/434)
 

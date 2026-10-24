@@ -90,9 +90,9 @@ panic = "abort"
 midnight-base-crypto = { path = "base-crypto" }
 midnight-serialize = { path = "serialize" }
 midnight-curves = { path = "vendor/midnight-curves-0.3.1" }
-midnight-circuits = { path = "vendor/midnight-circuits-7.2.2" }
+midnight-circuits = { path = "vendor/midnight-circuits-7.2.1" }
 midnight-proofs = { path = "vendor/midnight-proofs-0.8.1" }
-midnight-zk-stdlib = { path = "vendor/midnight-zk-stdlib-2.3.3" }
+midnight-zk-stdlib = { path = "vendor/midnight-zk-stdlib-2.3.1" }
 sppark = { path = "vendor/sppark-0.1.15" }
 # Because we rely on additions in 2.2
 midnight-transient-crypto-old = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "transient-crypto-2.2.0-rc.1", package = "midnight-transient-crypto" }

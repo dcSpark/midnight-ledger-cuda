@@ -12,7 +12,7 @@
 [package]
 edition = "2021"
 name = "midnight-circuits"
-version = "7.2.2"
+version = "7.2.1"
 build = false
 autolib = false
 autobins = false

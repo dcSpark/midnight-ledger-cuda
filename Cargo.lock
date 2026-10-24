@@ -3705,7 +3705,7 @@ dependencies = [
 
 [[package]]
 name = "midnight-circuits"
-version = "7.2.2"
+version = "7.2.1"
 dependencies = [
  "base64 0.13.1",
  "ff",
@@ -4352,13 +4352,13 @@ dependencies = [
  "lru 0.18.0",
  "midnight-base-crypto",
  "midnight-base-crypto-derive 1.1.0",
- "midnight-circuits 7.2.2",
+ "midnight-circuits 7.2.1",
  "midnight-curves 0.3.1",
  "midnight-proofs 0.8.1",
  "midnight-serialize",
  "midnight-storage-core 1.2.0",
  "midnight-transient-crypto 3.0.0",
- "midnight-zk-stdlib 2.3.3",
+ "midnight-zk-stdlib 2.3.1",
  "pastey",
  "proptest",
  "proptest-derive",
@@ -4400,7 +4400,7 @@ dependencies = [
 
 [[package]]
 name = "midnight-zk-stdlib"
-version = "2.3.3"
+version = "2.3.1"
 dependencies = [
  "base64 0.13.1",
  "bincode 2.0.1",
@@ -4409,7 +4409,7 @@ dependencies = [
  "ff",
  "group",
  "hex-literal",
- "midnight-circuits 7.2.2",
+ "midnight-circuits 7.2.1",
  "midnight-curves 0.3.1",
  "midnight-proofs 0.8.1",
  "num-bigint",
@@ -4438,7 +4438,7 @@ dependencies = [
  "log",
  "midnight-base-crypto",
  "midnight-circuits 6.2.1",
- "midnight-circuits 7.2.2",
+ "midnight-circuits 7.2.1",
  "midnight-curves 0.3.1",
  "midnight-proofs 0.7.2",
  "midnight-proofs 0.8.1",
@@ -4446,7 +4446,7 @@ dependencies = [
  "midnight-transient-crypto 2.2.0",
  "midnight-transient-crypto 3.0.0",
  "midnight-zk-stdlib 1.2.1",
- "midnight-zk-stdlib 2.3.3",
+ "midnight-zk-stdlib 2.3.1",
  "midnight-zkir",
  "num-bigint",
  "pastey",
@@ -4480,12 +4480,12 @@ dependencies = [
  "indicatif",
  "log",
  "midnight-base-crypto",
- "midnight-circuits 7.2.2",
+ "midnight-circuits 7.2.1",
  "midnight-curves 0.3.1",
  "midnight-proofs 0.8.1",
  "midnight-serialize",
  "midnight-transient-crypto 3.0.0",
- "midnight-zk-stdlib 2.3.3",
+ "midnight-zk-stdlib 2.3.1",
  "midnight-zkir-v3",
  "num-bigint",
  "num-traits",

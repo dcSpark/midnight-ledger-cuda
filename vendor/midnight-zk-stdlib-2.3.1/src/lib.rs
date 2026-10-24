@@ -1850,7 +1850,7 @@ pub trait Relation: Clone {
     type Witness: Clone;
 
     /// The error type returned by [Self::circuit] and [Self::format_instance].
-    type Error: From<plonk::Error> + Debug;
+    type Error: From<plonk::Error>;
 
     /// Produces a vector of field elements in PLONK format representing the
     /// given [Self::Instance].
@@ -1946,9 +1946,8 @@ impl<R: Relation> Circuit<F> for MidnightCircuit<'_, R> {
         self.relation
             .direct_resident_advice_values(self.witness.as_ref(), domain_len, num_advice_columns)
             .map_err(|e| {
-                let error_msg = format!("Relation::direct_resident_advice_values error: {e:?}");
                 *self.circuit_error.borrow_mut() = Some(e);
-                Error::Synthesis(error_msg)
+                Error::Synthesis("Relation::direct_resident_advice_values error".into())
             })
     }
 
@@ -1960,9 +1959,8 @@ impl<R: Relation> Circuit<F> for MidnightCircuit<'_, R> {
         self.relation
             .direct_advice_values(self.witness.as_ref(), domain_len, num_advice_columns)
             .map_err(|e| {
-                let error_msg = format!("Relation::direct_advice_values error: {e:?}");
                 *self.circuit_error.borrow_mut() = Some(e);
-                Error::Synthesis(error_msg)
+                Error::Synthesis("Relation::direct_advice_values error".into())
             })
     }
 
@@ -1982,9 +1980,8 @@ impl<R: Relation> Circuit<F> for MidnightCircuit<'_, R> {
                 self.witness.clone(),
             )
             .map_err(|e| {
-                let error_msg = format!("Relation::circuit error: {e:?}");
                 *self.circuit_error.borrow_mut() = Some(e);
-                Error::Synthesis(error_msg)
+                Error::Synthesis("Relation::circuit error".into())
             })?;
 
         // After the circuit function has been called, we can update the expected

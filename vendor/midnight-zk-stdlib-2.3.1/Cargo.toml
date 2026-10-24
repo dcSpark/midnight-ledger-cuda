@@ -12,7 +12,7 @@
 [package]
 edition = "2021"
 name = "midnight-zk-stdlib"
-version = "2.3.3"
+version = "2.3.1"
 build = false
 autolib = false
 autobins = false
@@ -151,7 +151,7 @@ version = "0.2.0"
 package = "sha3-circuit"
 
 [dependencies.midnight-circuits]
-version = "7.2.2"
+version = "7.2.1"
 features = ["testing"]
 
 [dependencies.midnight-curves]
