@@ -717,8 +717,14 @@ kernel void bls12_381_metal_msm_fixed_reduce_xyzz_v10(
                 accumulator, static_cast<ushort>(stride));
         const uint right_valid = simd_shuffle_down(
             lane_valid, static_cast<ushort>(stride));
+        // Every lane adds; only the lanes in the tree keep the sum. With the add
+        // inside the lane-dependent branch, between SIMD shuffles, a SIMD
+        // group's bucket roots came back wrong on rare runs (about one batched
+        // output in 1,000 at width 16), like the integration kernel below.
+        const Bls12381MetalMsmXyzzV4 combined =
+            bls12_381_msm_xyzz_add_v4(accumulator, right);
         if (local_lane < stride && local_lane + stride < tree_span) {
-            accumulator = bls12_381_msm_xyzz_add_v4(accumulator, right);
+            accumulator = combined;
             lane_valid &= right_valid;
         }
     }
@@ -927,17 +933,25 @@ kernel void bls12_381_metal_msm_fixed_integrate_blocks_v10(
         const Bls12381MetalMsmXyzzV4 right_weighted =
             bls12_381_msm_xyzz_simd_shuffle_down_v4(
                 weighted, static_cast<ushort>(stride));
-        if ((local_lane & ((stride << 1U) - 1U)) == 0U) {
-            Bls12381MetalMsmXyzzV4 scaled = running;
-            for (uint scale = buckets_per_lane * stride;
-                 scale > 1U;
-                 scale >>= 1U) {
-                scaled = bls12_381_msm_xyzz_double_v4(scaled);
-            }
-            weighted = bls12_381_msm_xyzz_add_v4(
+        // Every lane combines; only the lanes that own the pair keep it. With
+        // the doubling loop inside the lane-dependent branch, between this
+        // stride's shuffles and the next, some batched outputs came back wrong
+        // on some runs (widths 12 to 16, M5 Pro, macOS 27.0.1).
+        Bls12381MetalMsmXyzzV4 scaled = running;
+        for (uint scale = buckets_per_lane * stride;
+             scale > 1U;
+             scale >>= 1U) {
+            scaled = bls12_381_msm_xyzz_double_v4(scaled);
+        }
+        const Bls12381MetalMsmXyzzV4 combined_weighted =
+            bls12_381_msm_xyzz_add_v4(
                 bls12_381_msm_xyzz_add_v4(weighted, scaled),
                 right_weighted);
-            running = bls12_381_msm_xyzz_add_v4(running, right_sum);
+        const Bls12381MetalMsmXyzzV4 combined_running =
+            bls12_381_msm_xyzz_add_v4(running, right_sum);
+        if ((local_lane & ((stride << 1U) - 1U)) == 0U) {
+            weighted = combined_weighted;
+            running = combined_running;
         }
     }
     if (local_lane == 0U) {

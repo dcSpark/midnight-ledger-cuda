@@ -37,6 +37,21 @@
   library failure; the 100-pair soak produced 14,200 outputs with the same
   result.
 
+### Fixes
+
+- The fixed-base v10 integration and bucket-reduction kernels no longer do
+  group arithmetic inside a lane-dependent branch between SIMD shuffles. Every
+  lane computes the combination and only the owning lanes keep it. Before,
+  batched fixed-base MSMs returned wrong points for some outputs on some runs
+  (observed on an M5 Pro, macOS 27.0.1): the integration kernel at widths 12
+  to 16, and the bucket reduction for a SIMD group of buckets on about one
+  output in 1,000. Proofs made with Metal then failed to verify. Six-output
+  batches over 2^16 bases take about 5% longer at width 13 and about 20%
+  longer at width 16. Covered by
+  `fixed_base_batches_match_blst_on_repeated_runs_at_every_width`,
+  `fixed_base_batch_soak_matches_blst` and the
+  `metal-fixed-base-msm-regression` tests.
+
 ### Current limits and release boundary
 
 - Version 0.1 is intentionally thread-affine and exposes only the trusted-local,
