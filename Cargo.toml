@@ -9,6 +9,7 @@ members = [
     "proof-server",
     "proof-server-cuda",
     "cuda-resident-multiopen-regression",
+    "metal-fixed-base-msm-regression",
     "midnight-gpu-prover",
     "midnight-metal-prover",
     "midnight-sppark-msm",
