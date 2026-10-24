@@ -429,6 +429,127 @@ fn fixed_base_long_bucket_tiling_matches_blst_for_batched_skew() {
     }
 }
 
+/// Deterministic test scalars below 2^254, so every one is canonical. Uniform
+/// scalars spread over all buckets; witness-like ones (a quarter each zero,
+/// below 2^8, below 2^64 and full width) pile many terms into a few buckets,
+/// as proof witnesses do, and take the long-bucket path.
+fn pseudorandom_scalars(seed: u64, count: usize, witness_like: bool) -> Vec<CanonicalScalar> {
+    let mut state = seed;
+    let mut next = || {
+        // splitmix64
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    };
+    (0..count)
+        .map(|_| {
+            let full = [next(), next(), next(), next() & 0x3fff_ffff_ffff_ffff];
+            match if witness_like { full[0] % 4 } else { 3 } {
+                0 => CanonicalScalar::ZERO,
+                1 => scalar([full[1] & 0xff, 0, 0, 0]),
+                2 => scalar([full[1], 0, 0, 0]),
+                _ => scalar(full),
+            }
+        })
+        .collect()
+}
+
+fn expected_msm_pippenger(
+    bases: &[blst::blst_p1_affine],
+    scalars: &[CanonicalScalar],
+) -> blst::blst_p1_affine {
+    use blst::MultiPoint;
+    assert_eq!(bases.len(), scalars.len());
+    let bytes: Vec<u8> = scalars.iter().flat_map(|scalar| scalar.to_le_bytes()).collect();
+    let sum = bases.mult(&bytes, 255);
+    let mut affine = blst::blst_p1_affine::default();
+    // SAFETY: `sum` is initialized and `affine` is a distinct output.
+    unsafe { blst::blst_p1_to_affine(&mut affine, &sum) };
+    affine
+}
+
+/// Batches of two or more fixed-base outputs over enough bases that the v10
+/// kernels combine lanes inside a SIMD group, repeated on the same scalars at
+/// every width, for uniform and witness-like scalars. The kernels once returned
+/// a wrong point for some outputs on some runs only, so one run is not enough.
+#[test]
+#[ignore = "requires access to an Apple Metal device"]
+fn fixed_base_batches_match_blst_on_repeated_runs_at_every_width() {
+    const BASES: usize = 1 << 16;
+    const RUNS: usize = 32;
+    let engine = engine();
+    let (raw_bases, reference_bases) = prepared_points(BASES);
+    let sets: Vec<(&str, Vec<Vec<CanonicalScalar>>)> = vec![
+        ("uniform", (0..2).map(|output| pseudorandom_scalars(0x5eed + output, BASES, false)).collect()),
+        ("witness-like", (0..6).map(|output| pseudorandom_scalars(0xface + output, BASES, true)).collect()),
+    ];
+    let expected: Vec<Vec<_>> = sets
+        .iter()
+        .map(|(_, batches)| {
+            batches.iter().map(|batch| expected_msm_pippenger(&reference_bases, batch)).collect()
+        })
+        .collect();
+
+    let mut wrong = Vec::new();
+    for window in [
+        FixedWindowBits::W11,
+        FixedWindowBits::W12,
+        FixedWindowBits::W13,
+        FixedWindowBits::W14,
+        FixedWindowBits::W15,
+        FixedWindowBits::W16,
+    ] {
+        let prepared =
+            engine.prepare_fixed_bases(&raw_bases, window).expect("prepare shifted fixed bases");
+        for ((name, batches), expected) in sets.iter().zip(&expected) {
+            let views: Vec<&[CanonicalScalar]> = batches.iter().map(Vec::as_slice).collect();
+            for run in 0..RUNS {
+                let actual = engine.msm_fixed_batch(&prepared, &views).expect("fixed-base batch");
+                for (output, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+                    let actual = normalize_metal(*actual);
+                    if actual.x.l != expected.x.l || actual.y.l != expected.y.l {
+                        wrong.push(format!("{name} window {} run {run} output {output}", window.get()));
+                    }
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "fixed-base batch outputs differ from BLST: {wrong:?}");
+}
+
+/// Many repeats of one six-output batch at width 16. The bucket reduction
+/// once returned wrong roots for a SIMD group of buckets on about one batched
+/// output in 1,000, too rare for the test above to catch reliably.
+#[test]
+#[ignore = "requires access to an Apple Metal device; soak, about two minutes"]
+fn fixed_base_batch_soak_matches_blst() {
+    const BASES: usize = 1 << 16;
+    const RUNS: usize = 1_000;
+    let engine = engine();
+    let (raw_bases, reference_bases) = prepared_points(BASES);
+    let batches: Vec<Vec<CanonicalScalar>> =
+        (0..6).map(|output| pseudorandom_scalars(0xbeef + output, BASES, false)).collect();
+    let expected: Vec<_> =
+        batches.iter().map(|batch| expected_msm_pippenger(&reference_bases, batch)).collect();
+    let views: Vec<&[CanonicalScalar]> = batches.iter().map(Vec::as_slice).collect();
+    let prepared = engine
+        .prepare_fixed_bases(&raw_bases, FixedWindowBits::W16)
+        .expect("prepare shifted fixed bases");
+    let mut wrong = Vec::new();
+    for run in 0..RUNS {
+        let actual = engine.msm_fixed_batch(&prepared, &views).expect("fixed-base batch");
+        for (output, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
+            let actual = normalize_metal(*actual);
+            if actual.x.l != expected.x.l || actual.y.l != expected.y.l {
+                wrong.push(format!("run {run} output {output}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "fixed-base batch outputs differ from BLST: {wrong:?}");
+}
+
 #[test]
 #[ignore = "requires access to an Apple Metal device"]
 fn parallel_projective_reducer_matches_blst_across_windows_and_batches() {

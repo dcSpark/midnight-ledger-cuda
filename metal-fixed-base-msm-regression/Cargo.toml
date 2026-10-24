@@ -1,0 +1,47 @@
+[package]
+name = "midnight-metal-fixed-base-msm-regression"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+publish = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+
+[features]
+default = []
+metal = [
+    "dep:blake2b_simd",
+    "dep:ff",
+    "dep:midnight-circuits",
+    "dep:midnight-curves",
+    "dep:midnight-proofs",
+    "dep:midnight-zk-stdlib",
+    "dep:rand_chacha",
+    "midnight-curves/gpu-metal",
+    "midnight-proofs/gpu-metal",
+    "midnight-proofs/metal-resident-quotient-diagnostic",
+    "midnight-zk-stdlib/metal-resident-quotient-diagnostic",
+]
+
+[dependencies]
+blake2b_simd = { version = "1.0.4", optional = true }
+ff = { version = "0.13", optional = true }
+midnight-circuits = { version = "=7.2.2", optional = true }
+midnight-curves = { version = "=0.3.1", optional = true }
+midnight-proofs = { version = "=0.8.1", optional = true }
+midnight-zk-stdlib = { version = "=2.3.3", optional = true }
+rand_chacha = { version = "0.3", optional = true }
+
+[[test]]
+name = "kzg_commit_batch"
+path = "tests/kzg_commit_batch.rs"
+required-features = ["metal"]
+
+[[test]]
+name = "prove_verify"
+path = "tests/prove_verify.rs"
+required-features = ["metal"]
