@@ -15,6 +15,9 @@
 #include <cub/device/device_scan.cuh>
 #include <cub/device/device_select.cuh>
 #include <cuda/std/tuple>
+#ifdef MIDNIGHT_SPPARK_TEST_HOOKS
+#include <chrono>
+#endif
 #include <gmp.h>
 #include <cgbn/cgbn.h>
 
@@ -299,7 +302,8 @@ public:
         const scalar_t *scalars,
         size_t scalar_count,
         const RawMsmSlice *slices,
-        size_t count)
+        size_t count,
+        const event_t *ready = nullptr)
     {
         for (size_t i = 0; i < count; ++i) {
             const auto& slice = slices[i];
@@ -320,7 +324,7 @@ public:
                 scalars + slice.scalar_offset,
                 slice.len,
                 slice.nonzero_len);
-        });
+        }, ready);
     }
 };
 
@@ -6327,8 +6331,13 @@ extern "C" RustError midnight_sppark_bls12_381_g1_msm_context_device_batch(
     }
 
     try {
+        const gpu_t& gpu = active_gpu();
+        gpu.select();
+        // Device-vector producers use gpu's primary stream; MSM engines read
+        // on independent nonblocking streams, so host call order is not enough.
+        event_t inputs_ready{static_cast<cudaStream_t>(gpu)};
         const scalar_t *base = device_values(device) + scalar_offset;
-        return msm->invoke_device_batch(typed_out, base, npoints, nmsms);
+        return msm->invoke_device_batch(typed_out, base, npoints, nmsms, &inputs_ready);
     } catch (const cuda_error& e) {
         return RustError{e.code(), e.what()};
     }
@@ -6352,16 +6361,67 @@ extern "C" RustError midnight_sppark_bls12_381_g1_msm_context_device_ragged(
     auto *msm = reinterpret_cast<msm_context_t *>(context);
     const auto *device = reinterpret_cast<const scalar_device_vec_t *>(device_vec);
     try {
+        const gpu_t& gpu = active_gpu();
+        gpu.select();
+        event_t inputs_ready{static_cast<cudaStream_t>(gpu)};
         return msm->invoke_device_ragged(
             typed_out,
             device_values(device),
             device->len,
             slices,
-            count);
+            count,
+            &inputs_ready);
     } catch (const cuda_error& e) {
         return RustError{e.code(), e.what()};
     }
 }
+
+#ifdef MIDNIGHT_SPPARK_TEST_HOOKS
+// Hold back this producer without blocking independent CUDA streams. The
+// regression test must observe the scalar-mask dependency, not a lucky schedule.
+static thread_local uint32_t test_mask_delay_ms = 0;
+extern "C" void midnight_sppark_test_mask_delay(uint32_t delay_ms)
+{
+    test_mask_delay_ms = delay_ms;
+}
+
+static void test_delay_producer(const gpu_t& gpu, uint32_t delay_ms)
+{
+    static_cast<stream_t&>(gpu).notify([](void *delay) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(
+            reinterpret_cast<uintptr_t>(delay)));
+    }, reinterpret_cast<void *>(static_cast<uintptr_t>(delay_ms)));
+}
+
+static void test_delay_mask_producer(const gpu_t& gpu, scalar_t *masked, size_t len)
+{
+    if (test_mask_delay_ms == 0)
+        return;
+    // Make a premature read deterministic rather than reading uninitialized data.
+    gpu.bzero(masked, len);
+    static_cast<stream_t&>(gpu).sync();
+    test_delay_producer(gpu, test_mask_delay_ms);
+}
+
+extern "C" RustError midnight_sppark_test_delayed_scale(
+    void *raw_device, RawFr scale, uint32_t delay_ms)
+{
+    auto *device = reinterpret_cast<scalar_device_vec_t *>(raw_device);
+    const gpu_t& gpu = active_gpu();
+    try {
+        gpu.select();
+        static_cast<stream_t&>(gpu).sync();
+        test_delay_producer(gpu, delay_ms);
+        fr_mul_assign_kernel<<<(device->len + 255) / 256, 256, 0, gpu>>>(
+            device_values(device), load_scalar(scale), device->len);
+        CUDA_OK(cudaGetLastError());
+        return RustError{cudaSuccess};
+    } catch (const cuda_error& e) {
+        gpu.sync();
+        return RustError{e.code(), e.what()};
+    }
+}
+#endif
 
 extern "C" RustError midnight_sppark_bls12_381_g1_msm_context_device_scrambled_batch(
     RawG1Projective *out,
@@ -6400,6 +6460,9 @@ extern "C" RustError midnight_sppark_bls12_381_g1_msm_context_device_scrambled_b
     try {
         gpu.select();
         dev_ptr_t<scalar_t> masked{scalar_count, gpu};
+#ifdef MIDNIGHT_SPPARK_TEST_HOOKS
+        test_delay_mask_producer(gpu, &masked[0], scalar_count);
+#endif
         const size_t block = 256;
         fr_add_mask_copy_kernel<<<(scalar_count + block - 1) / block, block, 0, gpu>>>(
             &masked[0],
@@ -6408,8 +6471,9 @@ extern "C" RustError midnight_sppark_bls12_381_g1_msm_context_device_scrambled_b
             npoints,
             scalar_count);
         CUDA_OK(cudaGetLastError());
-        event_t masked_ready;
-        gpu[0].record(masked_ready);
+        // gpu converts to its primary stream, NOT gpu[0] (a separate flip-flop
+        // stream). Capture the actual mask producer before any MSM reads it.
+        event_t masked_ready{static_cast<cudaStream_t>(gpu)};
         return msm->invoke_device_batch(
             typed_out,
             &masked[0],

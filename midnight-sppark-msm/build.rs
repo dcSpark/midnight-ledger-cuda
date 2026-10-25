@@ -18,6 +18,9 @@ fn main() {
 
     let mut build = sppark::build::ccmd();
     build.flag("-std=c++17");
+    if std::env::var_os("CARGO_FEATURE_TEST_HOOKS").is_some() {
+        build.define("MIDNIGHT_SPPARK_TEST_HOOKS", None);
+    }
     // Reserve independent accumulate cursors for the compatibility context and
     // eight proof-owned execution lanes. Each lane may use up to sixteen MSM
     // engines, with two cursors per engine.

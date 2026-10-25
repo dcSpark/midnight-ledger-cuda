@@ -37,6 +37,12 @@ path = "src/bin/proof_backend_parity.rs"
 required-features = ["deterministic-test-rng"]
 test = true
 
+[[bin]]
+name = "proof-request-profile"
+path = "src/bin/proof_request_profile.rs"
+required-features = ["deterministic-test-rng", "gpu-blitzar"]
+test = false
+
 [dependencies]
 ledger = { path = "../ledger", package = "midnight-ledger-v9", default-features = false, features = ["proving"] }
 zswap = { path = "../zswap", package = "midnight-zswap" }
