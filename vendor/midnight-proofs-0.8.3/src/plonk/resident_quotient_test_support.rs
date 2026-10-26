@@ -882,7 +882,10 @@ mod tests {
         assert_eq!(challenge, 34);
     }
 
-    #[cfg(all(not(feature = "gpu-blitzar"), not(feature = "gpu-metal")))]
+    #[cfg(all(
+        not(feature = "gpu-blitzar"),
+        not(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))
+    ))]
     #[test]
     fn authentic_trace_metal_and_cpu_quotient_prefixes_match() {
         const K: u32 = 4;

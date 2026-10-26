@@ -519,7 +519,7 @@ pub mod gpu_sppark {
     }
 }
 
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 pub mod gpu_metal {
     //! Explicit host-round-trip Metal transforms for the hybrid proof route.
 
