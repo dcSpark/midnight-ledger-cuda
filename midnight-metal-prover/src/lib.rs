@@ -23,7 +23,9 @@
 //! proof-backend readiness: working primitives prove that the Metal toolchain
 //! and arithmetic are usable, not that proof generation runs on Metal.
 
-use std::{fmt, marker::PhantomData, sync::OnceLock};
+#[cfg(all(target_os = "macos", target_arch = "aarch64", midnight_metal_shaders))]
+use std::marker::PhantomData;
+use std::{fmt, sync::OnceLock};
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64", midnight_metal_shaders))]
 use bls12_381_metal_msm::ResidentMontgomeryScalars;

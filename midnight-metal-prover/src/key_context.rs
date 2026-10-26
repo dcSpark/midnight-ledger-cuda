@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use crate::{Bls12_381Fr, MetalError, NttDomainSpec, generated};
 
 pub(crate) mod v2;
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos", target_arch = "aarch64", midnight_metal_shaders))]
 pub(crate) use v2::tests::OwnedV2Input;
 pub use v2::{
     METAL_KEY_CONTEXT_SCHEMA_VERSION_V2, MetalKeyContextInputV2, MetalResidentColumnRef,
@@ -340,6 +340,7 @@ impl MetalKeyContextIdentity {
         }
     }
 
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", midnight_metal_shaders))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) const fn new(
         content_fingerprint: [u8; 32],
@@ -369,6 +370,7 @@ impl MetalKeyContextIdentity {
         }
     }
 
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", midnight_metal_shaders))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) const fn new_v2(
         content_fingerprint: [u8; 32],
@@ -415,6 +417,7 @@ impl MetalKeyContextIdentity {
 }
 
 pub(crate) struct ValidatedMetalKeyContextInput<'a> {
+    #[cfg_attr(not(all(target_os = "macos", target_arch = "aarch64", midnight_metal_shaders)), allow(dead_code))]
     pub(crate) input: MetalKeyContextInput<'a>,
     pub(crate) content_fingerprint: [u8; 32],
     pub(crate) immutable_bytes: usize,
