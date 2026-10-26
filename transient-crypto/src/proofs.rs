@@ -196,7 +196,7 @@ impl MetalNttGuard {
 pub struct ProofAcceleratorGuard {
     #[cfg(feature = "gpu-blitzar")]
     _blitzar: midnight_proofs::poly::kzg::gpu_blitzar::EnableGuard,
-    #[cfg(feature = "gpu-metal")]
+    #[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
     _metal: midnight_curves::gpu_metal::EnableGuard,
     _permit: GpuProofPermit,
 }
@@ -211,14 +211,14 @@ impl ProofAcceleratorGuard {
         );
         #[cfg(not(feature = "gpu-blitzar"))]
         assert!(!blitzar_enabled, "this build has no Blitzar proof route");
-        #[cfg(not(feature = "gpu-metal"))]
+        #[cfg(not(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64")))]
         assert!(!metal_enabled, "this build has no Metal proof route");
 
         let permit = GpuProofPermit::acquire(blitzar_enabled || metal_enabled);
         Self {
             #[cfg(feature = "gpu-blitzar")]
             _blitzar: midnight_proofs::poly::kzg::gpu_blitzar::EnableGuard::set(blitzar_enabled),
-            #[cfg(feature = "gpu-metal")]
+            #[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
             _metal: midnight_curves::gpu_metal::EnableGuard::set(metal_enabled),
             _permit: permit,
         }

@@ -766,11 +766,11 @@ impl MetalSession {
         );
     }
 
-    fn encode_quotient_epoch<'owner>(
+    fn encode_quotient_epoch(
         &self,
         context: &MetalKeyContext,
         validated: &ValidatedQuotientEpoch<'_>,
-        owner: &'owner mut QuotientEpochOwner<'_>,
+        owner: &mut QuotientEpochOwner<'_>,
     ) -> Result<CompletedQuotientEpochLocation, MetalError> {
         #[cfg(feature = "metal-diagnostics")]
         if std::env::var_os("MIDNIGHT_METAL_TRACE_QUOTIENT_PHASES").is_some() {

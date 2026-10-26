@@ -32,7 +32,7 @@ blake2b_simd = { version = "1.0.4", optional = true }
 ff = { version = "0.13", optional = true }
 midnight-circuits = { version = "=7.2.1", optional = true }
 midnight-curves = { version = "=0.3.1", optional = true }
-midnight-proofs = { version = "=0.8.1", optional = true }
+midnight-proofs = { version = "=0.8.3", optional = true }
 midnight-zk-stdlib = { version = "=2.3.1", optional = true }
 rand_chacha = { version = "0.3", optional = true }
 

@@ -1279,13 +1279,12 @@ pub mod metal {
             metal_fr_slice(request.points()),
             metal_fr_slice(request.f_weights()),
         );
-        let callback_result = session
+        session
             .with_bls12_381_multiopen(backend_request, |backend| {
                 let mut arena = ResidentMultiopenArena { backend };
                 Ok(with_arena(&mut arena))
             })
-            .map_err(|error| ResidentError::Backend(error.to_string()))?;
-        callback_result
+            .map_err(|error| ResidentError::Backend(error.to_string()))?
     }
 
     /// Commits one callback-scoped multi-open polynomial without scalar readback.
@@ -1895,37 +1894,6 @@ pub mod metal {
         ))
     }
 
-    #[cfg(test)]
-    mod diagnostic_quotient_adapter_tests {
-        use super::*;
-
-        #[test]
-        fn cpu_msm_lease_returns_zero_copy_piece_views() {
-            let values = [
-                RawFr { limbs: [1; 4] },
-                RawFr { limbs: [2; 4] },
-                RawFr { limbs: [3; 4] },
-                RawFr { limbs: [4; 4] },
-            ];
-            let lease = DiagnosticQuotientCpuMsmLease {
-                backend: None,
-                values: &values,
-                piece_len: 2,
-                piece_count: 2,
-                prepared_key_fingerprint: [5; 32],
-                prepared_srs_fingerprint: [6; 32],
-            };
-
-            let first = lease.piece(0).expect("borrow first quotient piece");
-            let second = lease.piece(1).expect("borrow second quotient piece");
-            assert_eq!(first.as_ptr(), values.as_ptr());
-            assert_eq!(second.as_ptr(), values[2..].as_ptr());
-            assert_eq!(lease.element_len(), 4);
-            assert_eq!(lease.byte_len(), 4 * std::mem::size_of::<RawFr>());
-            assert_eq!(lease.piece(2), Err(ResidentError::BufferBounds));
-        }
-    }
-
     struct ConvertedMetalGraphArrays {
         descriptors: Vec<metal_backend::MetalGraphDescriptor>,
         constants: Vec<metal_backend::Bls12_381Fr>,
@@ -2185,6 +2153,37 @@ pub mod metal {
             // route. Kernel/runtime readiness alone must never unlock it.
             execution_routed: false,
             unavailable_reason,
+        }
+    }
+
+    #[cfg(test)]
+    mod diagnostic_quotient_adapter_tests {
+        use super::*;
+
+        #[test]
+        fn cpu_msm_lease_returns_zero_copy_piece_views() {
+            let values = [
+                RawFr { limbs: [1; 4] },
+                RawFr { limbs: [2; 4] },
+                RawFr { limbs: [3; 4] },
+                RawFr { limbs: [4; 4] },
+            ];
+            let lease = DiagnosticQuotientCpuMsmLease {
+                backend: None,
+                values: &values,
+                piece_len: 2,
+                piece_count: 2,
+                prepared_key_fingerprint: [5; 32],
+                prepared_srs_fingerprint: [6; 32],
+            };
+
+            let first = lease.piece(0).expect("borrow first quotient piece");
+            let second = lease.piece(1).expect("borrow second quotient piece");
+            assert_eq!(first.as_ptr(), values.as_ptr());
+            assert_eq!(second.as_ptr(), values[2..].as_ptr());
+            assert_eq!(lease.element_len(), 4);
+            assert_eq!(lease.byte_len(), 4 * std::mem::size_of::<RawFr>());
+            assert_eq!(lease.piece(2), Err(ResidentError::BufferBounds));
         }
     }
 }

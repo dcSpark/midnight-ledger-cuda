@@ -280,7 +280,7 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
     where
         F: 'static,
     {
-        #[cfg(feature = "gpu-metal")]
+        #[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
         {
             let inputs = polynomials
                 .iter()
@@ -372,7 +372,7 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
             }
         }
 
-        #[cfg(feature = "gpu-metal")]
+        #[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
         {
             let inputs = polynomials
                 .iter()

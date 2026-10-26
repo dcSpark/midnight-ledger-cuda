@@ -59,6 +59,8 @@
           ./proof-server
           ./proof-server-cuda
           ./cuda-resident-multiopen-regression
+          ./metal-fixed-base-msm-regression
+          ./bls12-381-metal-msm
           ./midnight-gpu-prover
           ./midnight-metal-prover
           ./midnight-sppark-msm

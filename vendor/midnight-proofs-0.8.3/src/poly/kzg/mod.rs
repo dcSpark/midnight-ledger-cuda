@@ -9,7 +9,7 @@
 
 #[cfg(any(
     feature = "gpu-blitzar",
-    feature = "gpu-metal",
+    all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"),
     feature = "metal-resident-quotient-test-support"
 ))]
 use std::any::TypeId;
@@ -31,7 +31,7 @@ mod utils;
 #[doc(hidden)]
 pub use resident_multiopen_test_support::assert_resident_multiopen_ownership_error_isolation;
 
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 use std::sync::{Mutex, OnceLock};
 use std::{fmt::Debug, hash::Hash};
 
@@ -40,7 +40,7 @@ use group::Group;
 use midnight_curves::pairing::MultiMillerLoop;
 use rand_core::OsRng;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 use zeroize::{Zeroize, Zeroizing};
 
 #[cfg(feature = "truncated-challenges")]
@@ -69,7 +69,10 @@ use crate::{
 #[cfg(feature = "gpu-blitzar")]
 use crate::poly::query::Query;
 
-#[cfg(any(feature = "gpu-blitzar", feature = "gpu-metal"))]
+#[cfg(any(
+    feature = "gpu-blitzar",
+    all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64")
+))]
 use self::utils::construct_intermediate_set_metadata;
 
 #[derive(Clone, Debug)]
@@ -155,7 +158,10 @@ pub(crate) fn diagnostic_scalar_slice(
     }
 }
 
-#[cfg(any(feature = "gpu-blitzar", feature = "gpu-metal"))]
+#[cfg(any(
+    feature = "gpu-blitzar",
+    all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64")
+))]
 fn is_midnight_bls12_381<E: Engine>() -> bool
 where
     E::Fr: Sync + 'static,
@@ -167,7 +173,7 @@ where
         && TypeId::of::<E::G1Affine>() == TypeId::of::<midnight_curves::G1Affine>()
 }
 
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 fn metal_msm_selected() -> bool {
     if !midnight_curves::gpu_metal::enabled() {
         return false;
@@ -185,20 +191,20 @@ fn metal_msm_selected() -> bool {
     }
 }
 
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 static METAL_HYBRID_CPU_MSM_LOCK: Mutex<()> = Mutex::new(());
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 static METAL_MSM_CPU_MAX_NONZERO: OnceLock<usize> = OnceLock::new();
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 // A bounded host partition removes tiny, launch-dominated commitments while
 // the Metal worker processes the rest of the same batch. The authentic
 // workload's measured crossover is 512 nonzero scalars; the cap below keeps
 // larger BLST work from contending with witness synthesis.
 const METAL_MSM_DEFAULT_CPU_MAX_NONZERO: usize = 512;
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 const METAL_MSM_MAX_SAFE_CPU_NONZERO: usize = 8_192;
 
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 fn metal_msm_cpu_max_nonzero() -> usize {
     *METAL_MSM_CPU_MAX_NONZERO.get_or_init(|| {
         let value = match std::env::var("MIDNIGHT_METAL_MSM_CPU_MAX_NONZERO") {
@@ -220,7 +226,7 @@ fn metal_msm_cpu_max_nonzero() -> usize {
     })
 }
 
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 fn metal_msm_nonzero_count<F: Field>(scalars: &[F]) -> usize {
     scalars
         .iter()
@@ -228,12 +234,12 @@ fn metal_msm_nonzero_count<F: Field>(scalars: &[F]) -> usize {
         .count()
 }
 
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 fn metal_duration_ns(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
 
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 #[allow(unsafe_code)]
 fn metal_cpu_prepared_msm(
     prepared: &midnight_gpu_prover::PreparedResidentSrs,
@@ -292,7 +298,7 @@ fn metal_cpu_prepared_msm(
     })
 }
 
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 #[allow(unsafe_code)]
 fn try_metal_commit<E: Engine>(
     params: &ParamsKZG<E>,
@@ -345,7 +351,7 @@ where
     })())
 }
 
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 #[allow(unsafe_code)]
 fn try_metal_commit_batch<E: Engine, B>(
     params: &ParamsKZG<E>,
@@ -495,7 +501,7 @@ where
 }
 
 #[cfg(any(
-    feature = "gpu-metal",
+    all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"),
     feature = "metal-resident-quotient-test-support"
 ))]
 fn metal_msm_window_for_nonzero(
@@ -529,7 +535,7 @@ fn metal_msm_window_for_nonzero(
 }
 
 #[cfg(any(
-    feature = "gpu-metal",
+    all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"),
     feature = "metal-resident-quotient-test-support"
 ))]
 fn default_metal_msm_window_for_nonzero(
@@ -543,7 +549,7 @@ fn default_metal_msm_window_for_nonzero(
     }
 }
 
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 #[allow(unsafe_code)]
 fn metal_raw_scalars<F: 'static>(scalars: &[F]) -> &[midnight_gpu_prover::RawFr] {
     assert_eq!(TypeId::of::<F>(), TypeId::of::<midnight_curves::Fq>());
@@ -566,7 +572,7 @@ fn metal_raw_scalars<F: 'static>(scalars: &[F]) -> &[midnight_gpu_prover::RawFr]
 }
 
 #[cfg(any(
-    feature = "gpu-metal",
+    all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"),
     feature = "metal-resident-quotient-test-support"
 ))]
 #[allow(unsafe_code)]
@@ -587,7 +593,7 @@ fn metal_g1_from_raw<C: Copy + 'static>(
     unsafe { std::mem::transmute_copy(&point) }
 }
 
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 fn metal_resident_multiopen_enabled(poly_len: usize) -> bool {
     if !metal_msm_selected() {
         return false;
@@ -606,12 +612,12 @@ fn metal_resident_multiopen_enabled(poly_len: usize) -> bool {
     enabled && poly_len >= min_len
 }
 
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 fn metal_raw_scalar<F: Field + 'static>(value: F) -> midnight_gpu_prover::RawFr {
     metal_raw_scalars(std::slice::from_ref(&value))[0]
 }
 
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 #[allow(unsafe_code)]
 fn metal_field_from_raw<F: Field + 'static>(value: midnight_gpu_prover::RawFr) -> F {
     assert_eq!(TypeId::of::<F>(), TypeId::of::<midnight_curves::Fq>());
@@ -624,7 +630,7 @@ fn metal_field_from_raw<F: Field + 'static>(value: midnight_gpu_prover::RawFr) -
     unsafe { std::mem::transmute_copy(&value) }
 }
 
-#[cfg(feature = "gpu-metal")]
+#[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
 #[allow(unsafe_code)]
 fn try_metal_resident_multi_open<E: MultiMillerLoop, T: Transcript>(
     params: &ParamsKZG<E>,
@@ -1075,7 +1081,7 @@ where
     ) -> Self::Commitment {
         let size = polynomial.values.len();
         assert!(params.g.len() >= size);
-        #[cfg(feature = "gpu-metal")]
+        #[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
         if metal_msm_selected() && is_midnight_bls12_381::<E>() && !polynomial.values.is_empty() {
             return crate::perf_timer::timed_count(
                 "proof_server.prover.kzg.commit.coeff_msm.metal",
@@ -1122,7 +1128,7 @@ where
             .unwrap_or(0);
         assert!(params.g.len() >= size);
 
-        #[cfg(feature = "gpu-metal")]
+        #[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
         if metal_msm_selected()
             && is_midnight_bls12_381::<E>()
             && polynomials
@@ -1251,7 +1257,7 @@ where
 
         assert!(params.g_lagrange.len() >= size);
 
-        #[cfg(feature = "gpu-metal")]
+        #[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
         if metal_msm_selected() && is_midnight_bls12_381::<E>() && !poly.values.is_empty() {
             return crate::perf_timer::timed_count(
                 "proof_server.prover.kzg.commit.lagrange_msm.metal",
@@ -1300,7 +1306,7 @@ where
             .unwrap_or(0);
         assert!(params.g_lagrange.len() >= size);
 
-        #[cfg(feature = "gpu-metal")]
+        #[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
         if metal_msm_selected()
             && is_midnight_bls12_381::<E>()
             && polynomials
@@ -1997,7 +2003,7 @@ where
         let x1: E::Fr = transcript.squeeze_challenge();
         let x2: E::Fr = transcript.squeeze_challenge();
 
-        #[cfg(feature = "gpu-metal")]
+        #[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
         if let Some(result) =
             try_metal_resident_multi_open(params, prover_query, transcript, x1, x2)
         {
@@ -2633,7 +2639,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "gpu-metal")]
+    #[cfg(all(feature = "gpu-metal", target_os = "macos", target_arch = "aarch64"))]
     #[test]
     fn metal_msm_default_window_tracks_measured_density_crossover() {
         use midnight_gpu_prover::metal::Bls12_381MsmWindow::{FixedW11, FixedW13};
