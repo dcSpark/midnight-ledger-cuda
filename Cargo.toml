@@ -56,7 +56,7 @@ exclude = [
     # and integration tests. Keep it available through the patch below without
     # selecting those targets or unifying every protocol feature in broad
     # workspace jobs.
-    "vendor/midnight-proofs-0.8.1",
+    "vendor/midnight-proofs-0.8.3",
 ]
 
 # Pretty much every dependency is crypto.
@@ -92,7 +92,7 @@ midnight-base-crypto = { path = "base-crypto" }
 midnight-serialize = { path = "serialize" }
 midnight-curves = { path = "vendor/midnight-curves-0.3.1" }
 midnight-circuits = { path = "vendor/midnight-circuits-7.2.1" }
-midnight-proofs = { path = "vendor/midnight-proofs-0.8.1" }
+midnight-proofs = { path = "vendor/midnight-proofs-0.8.3" }
 midnight-zk-stdlib = { path = "vendor/midnight-zk-stdlib-2.3.1" }
 sppark = { path = "vendor/sppark-0.1.15" }
 # Because we rely on additions in 2.2

@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.76.0"
 name = "midnight-proofs"
-version = "0.8.1"
+version = "0.8.3"
 build = false
 autolib = false
 autobins = false

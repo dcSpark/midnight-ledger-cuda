@@ -16,7 +16,7 @@ default = []
 cuda = ["dep:midnight-proofs"]
 
 [dependencies]
-midnight-proofs = { version = "=0.8.1", default-features = false, optional = true, features = ["cuda-resident-multiopen-test-support"] }
+midnight-proofs = { version = "=0.8.3", default-features = false, optional = true, features = ["cuda-resident-multiopen-test-support"] }
 
 [[test]]
 name = "resident_multiopen"

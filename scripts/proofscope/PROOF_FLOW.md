@@ -77,7 +77,7 @@ Source anchors:
 - local proving provider: `zkir/src/lib.rs`
 - V2 ZKIR proving: `zkir/src/ir.rs`
 - stdlib PLONK wrapper: `vendor/midnight-zk-stdlib-2.3.1/src/lib.rs`
-- PLONK prover: `vendor/midnight-proofs-0.8.1/src/plonk/prover.rs`
+- PLONK prover: `vendor/midnight-proofs-0.8.3/src/plonk/prover.rs`
 
 ```mermaid
 flowchart TD

@@ -175,18 +175,18 @@ SOURCE_ROWS = [
     ("proof_server.prove.check", "proof-server/src/versioned_ir.rs", ""),
     (
         "proof_server.prover",
-        "vendor/midnight-zk-stdlib-2.3.1/src/lib.rs vendor/midnight-proofs-0.8.1/src/plonk/prover.rs",
+        "vendor/midnight-zk-stdlib-2.3.1/src/lib.rs vendor/midnight-proofs-0.8.3/src/plonk/prover.rs",
         "",
     ),
     ("proof_server.prover.stdlib", "vendor/midnight-zk-stdlib-2.3.1/src/lib.rs", ""),
     (
         "proof_server.prover.plonk",
-        "vendor/midnight-proofs-0.8.1/src/plonk/prover.rs vendor/midnight-proofs-0.8.1/src/plonk/vanishing/prover.rs",
+        "vendor/midnight-proofs-0.8.3/src/plonk/prover.rs vendor/midnight-proofs-0.8.3/src/plonk/vanishing/prover.rs",
         "",
     ),
     (
         "proof_server.prover.kzg",
-        "vendor/midnight-proofs-0.8.1/src/poly/kzg/mod.rs vendor/midnight-proofs-0.8.1/src/poly/kzg/msm.rs",
+        "vendor/midnight-proofs-0.8.3/src/poly/kzg/mod.rs vendor/midnight-proofs-0.8.3/src/poly/kzg/msm.rs",
         "",
     ),
     (

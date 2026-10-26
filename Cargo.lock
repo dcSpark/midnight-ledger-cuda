@@ -771,7 +771,7 @@ dependencies = [
  "ff",
  "hex",
  "midnight-curves 0.3.1",
- "midnight-proofs 0.8.1",
+ "midnight-proofs 0.8.3",
  "num-bigint",
  "rand 0.8.6",
  "serde",
@@ -3713,7 +3713,7 @@ dependencies = [
  "group",
  "lazy_static",
  "midnight-curves 0.3.1",
- "midnight-proofs 0.8.1",
+ "midnight-proofs 0.8.3",
  "num-bigint",
  "num-integer",
  "num-traits",
@@ -3750,7 +3750,7 @@ dependencies = [
 name = "midnight-cuda-resident-multiopen-regression"
 version = "0.1.0"
 dependencies = [
- "midnight-proofs 0.8.1",
+ "midnight-proofs 0.8.3",
 ]
 
 [[package]]
@@ -3919,7 +3919,7 @@ dependencies = [
  "ff",
  "midnight-circuits 7.2.1",
  "midnight-curves 0.3.1",
- "midnight-proofs 0.8.1",
+ "midnight-proofs 0.8.3",
  "midnight-zk-stdlib 2.3.1",
  "rand_chacha 0.3.1",
 ]
@@ -4063,7 +4063,7 @@ dependencies = [
  "midnight-ledger-v9",
  "midnight-onchain-runtime",
  "midnight-proof-server-cuda",
- "midnight-proofs 0.8.1",
+ "midnight-proofs 0.8.3",
  "midnight-serialize",
  "midnight-sppark-msm",
  "midnight-storage",
@@ -4116,7 +4116,7 @@ dependencies = [
 
 [[package]]
 name = "midnight-proofs"
-version = "0.8.1"
+version = "0.8.3"
 dependencies = [
  "ark-bls12-381",
  "ark-serialize",
@@ -4367,7 +4367,7 @@ dependencies = [
  "midnight-base-crypto-derive 1.1.0",
  "midnight-circuits 7.2.1",
  "midnight-curves 0.3.1",
- "midnight-proofs 0.8.1",
+ "midnight-proofs 0.8.3",
  "midnight-serialize",
  "midnight-storage-core 1.2.0",
  "midnight-transient-crypto 3.0.0",
@@ -4424,7 +4424,7 @@ dependencies = [
  "hex-literal",
  "midnight-circuits 7.2.1",
  "midnight-curves 0.3.1",
- "midnight-proofs 0.8.1",
+ "midnight-proofs 0.8.3",
  "num-bigint",
  "num-traits",
  "rand 0.8.6",
@@ -4454,7 +4454,7 @@ dependencies = [
  "midnight-circuits 7.2.1",
  "midnight-curves 0.3.1",
  "midnight-proofs 0.7.2",
- "midnight-proofs 0.8.1",
+ "midnight-proofs 0.8.3",
  "midnight-serialize",
  "midnight-transient-crypto 2.2.0",
  "midnight-transient-crypto 3.0.0",
@@ -4495,7 +4495,7 @@ dependencies = [
  "midnight-base-crypto",
  "midnight-circuits 7.2.1",
  "midnight-curves 0.3.1",
- "midnight-proofs 0.8.1",
+ "midnight-proofs 0.8.3",
  "midnight-serialize",
  "midnight-transient-crypto 3.0.0",
  "midnight-zk-stdlib 2.3.1",
@@ -6410,7 +6410,7 @@ dependencies = [
  "blake2b_simd",
  "ff",
  "midnight-curves 0.3.1",
- "midnight-proofs 0.8.1",
+ "midnight-proofs 0.8.3",
  "num-bigint",
  "rand 0.8.6",
 ]
