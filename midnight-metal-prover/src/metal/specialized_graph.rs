@@ -132,9 +132,7 @@ fn specialized_post_kinds(
     if custom == 1 {
         kinds[0] = Some(PostKind::Store);
     }
-    for index in custom..custom + lookups {
-        kinds[index] = Some(PostKind::Lookup);
-    }
+    kinds[custom..custom + lookups].fill(Some(PostKind::Lookup));
     let trash_start = custom
         .checked_add(lookups.checked_mul(3).ok_or_else(|| {
             MetalError::KeyContext("specialized graph lookup range overflows".into())
@@ -148,9 +146,7 @@ fn specialized_post_kinds(
             "specialized graph categories exceed the descriptor array".into(),
         ));
     }
-    for index in trash_start..trash_end {
-        kinds[index] = Some(PostKind::Trash);
-    }
+    kinds[trash_start..trash_end].fill(Some(PostKind::Trash));
     Ok(kinds)
 }
 

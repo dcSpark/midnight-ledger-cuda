@@ -8,8 +8,6 @@ use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 use crate::{
     Coordinates, CurveAffine, CurveExt,
     bn256::{Fq, Fq2, Fr},
-    impl_binops_additive, impl_binops_additive_specify_output, impl_binops_multiplicative,
-    impl_binops_multiplicative_mixed, new_curve_impl,
 };
 
 impl crate::serde::endian::EndianRepr for Fq2 {

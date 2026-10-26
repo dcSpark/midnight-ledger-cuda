@@ -3541,7 +3541,7 @@ fn fixed_route_timestamps(data: &NSData) -> Option<Vec<u64>> {
         .take(count)
         .map(|bytes| u64::from_ne_bytes(bytes.try_into().expect("counter timestamp width")))
         .collect::<Vec<_>>();
-    (!timestamps.iter().any(|timestamp| *timestamp == u64::MAX)).then_some(timestamps)
+    (!timestamps.contains(&u64::MAX)).then_some(timestamps)
 }
 
 #[cfg(feature = "metal-diagnostics")]
